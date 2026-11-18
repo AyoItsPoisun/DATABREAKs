@@ -1,6 +1,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -9,7 +10,7 @@
 #include <vector>
 
 #include "../../core/audio/audio_engine.h"
-#include "../../core/audio/mixer.h"
+#include "../../core/audio/layering_mixer.h"
 
 #include "../../instruments/synthesizers/mono_synth.h"
 #include "../../instruments/synthesizers/fm_synth.h"
@@ -79,7 +80,8 @@ int main() {
     MonoSynth mono;
     FMSynth fm;
     PolySynth poly;
-    StereoMixer mixer;
+
+    LayeringMixer mixer;
 
     // MONO parameters
     MonoParameters monoSettings;
@@ -121,9 +123,15 @@ int main() {
 
     poly.setParameters(polySettings);
 
+    // Independent layer volume controls.
+    mixer.setMonoVolume(0.75);
+    mixer.setFMVolume(0.65);
+    mixer.setPolyVolume(0.55);
     mixer.setMasterVolume(0.8);
 
-    const int bassNotes[] = {36, 36, 43, 31};
+    const int bassNotes[] = {
+        36, 36, 43, 31
+    };
 
     const int fmNotes[] = {
         60, 64, 67, 72, 67, 64, 62, 60
@@ -140,74 +148,67 @@ int main() {
 
     std::cout << "\n";
     std::cout << "DATABREAKs AUDIO ENGINE 003\n";
-    std::cout << "Independent Synthesizer Architecture\n\n";
+    std::cout << "Layered Synthesizer Architecture\n\n";
 
     for (int i = 0; i < totalFrames; ++i) {
         double time =
             static_cast<double>(i) / SAMPLE_RATE;
 
-        StereoFrame signal;
+        // MONO ENGINE: one bass note per second.
+        int monoIndex = static_cast<int>(
+            std::fmod(time, 4.0)
+        );
 
-        if (time < 4.0) {
-            // MONO ENGINE
-            int noteIndex = std::min(
-                3, static_cast<int>(time)
-            );
+        double monoTime = std::fmod(time, 1.0);
 
-            double noteTime = time - noteIndex;
+        double monoSample = mono.process(
+            midiToHz(bassNotes[monoIndex]),
+            monoTime,
+            0.82
+        );
 
-            signal.left = mono.process(
-                midiToHz(bassNotes[noteIndex]),
-                noteTime,
-                0.82
-            );
+        // FM ENGINE: one note every half second.
+        double fmPosition = std::fmod(time, 4.0);
 
-            signal.right = signal.left;
+        int fmIndex = static_cast<int>(
+            fmPosition / 0.5
+        );
 
-        } else if (time < 8.0) {
-            // FM ENGINE
-            double localTime = time - 4.0;
+        double fmTime = std::fmod(fmPosition, 0.5);
 
-            int noteIndex = std::min(
-                7, static_cast<int>(localTime / 0.5)
-            );
+        double fmSample = fm.process(
+            midiToHz(fmNotes[fmIndex]),
+            fmTime,
+            0.40
+        );
 
-            double noteTime =
-                std::fmod(localTime, 0.5);
+        // POLY ENGINE: one chord per second.
+        int chordIndex = static_cast<int>(
+            std::fmod(time, 4.0)
+        );
 
-            double sample = fm.process(
-                midiToHz(fmNotes[noteIndex]),
-                noteTime,
-                0.40
-            );
+        double polyTime = std::fmod(time, 1.0);
 
-            signal.left = sample;
-            signal.right = sample;
+        std::array<double, 4> frequencies;
 
-        } else {
-            // POLY ENGINE
-            double localTime = time - 8.0;
-
-            int chordIndex = std::min(
-                3, static_cast<int>(localTime)
-            );
-
-            double noteTime = localTime - chordIndex;
-
-            std::array<double, 4> frequencies;
-
-            for (int voice = 0; voice < 4; ++voice) {
-                frequencies[voice] = midiToHz(
-                    chords[chordIndex][voice]
-                );
-            }
-
-            signal = poly.process(
-                frequencies,
-                noteTime,
-                0.88
+        for (int voice = 0; voice < 4; ++voice) {
+            frequencies[voice] = midiToHz(
+                chords[chordIndex][voice]
             );
         }
+
+        StereoFrame polySample = poly.process(
+            frequencies,
+            polyTime,
+            0.88
+        );
+
+        // Combine all three instruments.
+        StereoFrame signal = mixer.process(
+            monoSample,
+            fmSample,
+            polySample
+        );
 
         // Short beginning and ending fades.
         double fade = std::min(
@@ -221,15 +222,27 @@ int main() {
         signal.left *= fade;
         signal.right *= fade;
 
-        audio[i] = mixer.process(signal);
+        audio[i] = signal;
     }
 
     writeWav("databreaks_engine_003.wav", audio);
 
-    std::cout << "MONO engine: initialized\n";
-    std::cout << "FM engine: initialized\n";
-    std::cout << "POLY engine: initialized\n";
-    std::cout << "Stereo mixer: initialized\n\n";
+    std::cout << "MONO engine: active\n";
+    std::cout << "FM engine: active\n";
+    std::cout << "POLY engine: active\n";
+    std::cout << "Layering mixer: active\n\n";
+
+    std::cout << "Mono volume: "
+              << mixer.getMonoVolume() << "\n";
+
+    std::cout << "FM volume: "
+              << mixer.getFMVolume() << "\n";
+
+    std::cout << "Poly volume: "
+              << mixer.getPolyVolume() << "\n";
+
+    std::cout << "Master volume: "
+              << mixer.getMasterVolume() << "\n\n";
 
     std::cout << "Sample rate: " << SAMPLE_RATE << " Hz\n";
     std::cout << "Duration: " << duration << " seconds\n";
