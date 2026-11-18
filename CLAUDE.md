@@ -13,7 +13,8 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 ## Current reality (keep this section honest and up to date)
 
 Development history: `90e8dfb` (initial synths) → `e75b325` on
-`recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018).
+`recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
+→ `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engine 019).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -21,7 +22,7 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 018
+### Components through Engine 019
 
 | Header | Purpose | Tested by |
 |---|---|---|
@@ -35,18 +36,33 @@ flashable FM-1 firmware.
 | `core/audio/tape_stream_transport.h`, `tape_streaming_engine.h` | Block-streaming tape playback + processing | Engines 012–014 |
 | `core/audio/sample_player.h` | `SamplePlayer`: region, pitch/rate, reverse, linear interpolation, block processing (Engine 015) | `engine_015` |
 | `core/audio/sample_slice_map.h` | `SampleSliceMap`: even slicing + movable boundaries (Engine 016) | `engine_016` |
-| `core/audio/sample_voice_manager.h` | `SampleVoiceManager<N>`: fixed voice pool, oldest-voice stealing, mixing (Engine 017) | `engine_017` |
-| `core/audio/drum_pad_bank.h` | `DrumPadBank<27>`: per-pad sample/region, volume, pitch, velocity sensitivity, reverse, choke groups → `TriggerEvent` (Engine 018) | `engine_018` |
+| `core/audio/sample_voice_manager.h` | `SampleVoiceManager<N>`: fixed voice pool, oldest-voice stealing, mixing (Engine 017). Engine 019 added slot-addressed `triggerInSlot`, `releaseVoice` (linear fade), `stopVoice`, per-slot queries and a per-slot generation counter; the original API behaves as before | `engine_017`, `engine_019` |
+| `core/audio/drum_pad_bank.h` | `DrumPadBank<27>`: per-pad sample/region, volume, pitch, velocity sensitivity, reverse, choke groups → `TriggerEvent` (Engine 018). Unchanged by Engine 019 | `engine_018` |
+| `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019) | `engine_019` (50 checks) |
 
-### Engine 019 (next task) — what is and is not connected
+### Engine 019 — drum voice integration (implemented, host-side only)
 
-`DrumPadBank::trigger()` produces a `TriggerEvent` (sample, region, rate,
-volume, `chokedPads[27]`) and tracks a *logical* per-pad `active` flag.
-`SampleVoiceManager` plays audio but has **no concept of pads**. Nothing yet
-turns a `TriggerEvent` into a voice, and nothing applies `chokedPads` to
-sounding audio. Engine 019 must provide that integration (see
-`docs/PROGRESS_REPORT.md` §6). Do not change the synth/DSP implementations
-as part of Engine 019 unless the maintainer asks.
+`DrumEngine<VoiceCount>` in `core/audio/drum_engine.h` owns one
+`DrumPadBank<27>` and one `SampleVoiceManager<VoiceCount>`. The 27 pads and the
+voice count are independent (default 16 voices, like the manager's default).
+
+- **Use it as the entry point for pad playback.** Configure pads through its
+  forwarding setters (`assignSample`, `setVolume`, `setPitch`,
+  `setVelocitySensitivity`, `setChokeGroup`, `setReverse`, `setRegion`,
+  `clearSample`), hit pads with `trigger(pad, velocity)`, and render with
+  `processBlock(out, n)`. `bank()` and `voices()` are read-only, so nothing can
+  bypass ownership tracking.
+- `processBlock` **adds into** the output buffer (same convention as
+  `SampleVoiceManager`). Pad activity is updated at the end of each block.
+- Ownership: each voice slot records `{pad, generation}`. A record counts only
+  while the slot's generation matches and the voice is active.
+- Choke and same-pad retrigger (default `RetriggerPolicy::FadeAndRetrigger`)
+  start a linear fade of `releaseFadeFrames()` frames (default 240 = 5 ms at
+  48 kHz). Fades only ever get quieter or faster.
+- Slot choice when hitting a pad: lowest free slot → oldest releasing voice →
+  oldest voice (a hard steal, with no fade).
+- Full details, limitations and test results: `docs/PROGRESS_REPORT.md` §6.
+- Do not change the synth or tape DSP as part of drum-engine work.
 
 ## Hardware constraints and safety rules
 
@@ -89,7 +105,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 21 tests
+ctest --test-dir build --output-on-failure          # all 22 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 
@@ -110,6 +126,9 @@ ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 3. Every new engine/component gets an assertion test registered in CTest with
    the `unit` label — add **both** the `add_executable` and the CTest entry
    (Engines 016–018 were once left out of the build by mistake).
+8. Audio-path code (`processBlock`, `trigger`, release/stop) must not allocate,
+   lock or block. `engine_019` check 41 enforces this for `DrumEngine` by
+   counting `operator new` calls; extend that pattern to new real-time code.
 4. Run the full build and `ctest` after every change; report exactly what was
    verified (host build, unit tests, listening) and what was not (hardware).
 5. Known bugs are listed in `docs/PROGRESS_REPORT.md`; fix them with tests that

@@ -1,63 +1,64 @@
 # DATABREAKs progress report
 
-Updated 2026-11-18 for branch `claude/engine-019-prep-transfer`, based on
-`recovery/codespaces-engine-018` @ `e75b325` ("Recover audio engine development
-through Engine 018").
+Updated 2026-11-18 for Engine 019 on branch `claude/engine-019-prep-transfer`.
+Engine 019 starts from `e54db9b` (CTest/docs transfer), whose parent is
+`e75b325` on `recovery/codespaces-engine-018` ("Recover audio engine
+development through Engine 018").
 
-History: the first version of this report (commit `eb93203`, branch
-`claude/engine-019-prep`) was written against `90e8dfb`, which had only the
-synth prototypes. At that time the sample player, slicing, voice manager and
-27-pad drum bank were **not in the repository**. They have since been
-recovered in `e75b325`, and this report has been updated to match.
+History of this report:
+
+- **`eb93203`:** written against `90e8dfb`, when only the synth prototypes existed.
+- **`e54db9b`:** updated after the sample player, slice map, voice manager and 27-pad drum bank were recovered in `e75b325`.
+- **Engine 019 commit:** updated again for the drum voice integration.
 
 ## 1. Summary
 
-The repository now contains host-side C++17 prototypes through **Engine 018**:
+The repository contains host-side C++17 prototypes through **Engine 019**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
-- a **sample player** (Engine 015);
-- a **sample slice map** (Engine 016);
-- a **multi-voice sample manager** (Engine 017);
-- a **27-pad drum bank with choke-group logic** (Engine 018).
+- a sample player (015);
+- a sample slice map (016);
+- a multi-voice sample manager (017);
+- a 27-pad drum bank (018);
+- **drum voice integration** (019).
 
-Everything builds and every test passes on the host.
-
-The drum bank and the voice manager are **not yet connected**. Pads produce
-trigger events and choke decisions, but nothing turns those into sounding or
-silenced voices. That connection is **Engine 019**.
+With Engine 019, pad hits produce audio through managed sample voices, and
+choke groups fade the voices that are actually sounding.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Nothing here can be installed on the device.
+pad scanning, storage or boot code. Engine 019 has been run only on a Linux
+development host. It has **not** been run or validated on an FM-1.
 
-## 2. What was verified (this branch)
+## 2. What was verified (Engine 019 commit)
 
-Environment: Linux, GCC 13.3.0, CMake 3.28.3. Clean build directory.
+Environment: Linux, GCC 13.3.0, CMake 3.28.3.
 
 | Check | Result |
 |---|---|
-| Configure + build | 21 executables, **0 warnings** (`-Wall -Wextra -Wpedantic`) |
-| `ctest` (all) | **21/21 pass** |
-| `ctest -L unit` | **11/11 pass**: `dsp_unit_tests` (35 assertions), Engines 011, 012, 013, 015, 016 (30), 017 (22), 018 (28), `tape_test`, `transport_test`, `tape_character_test` |
-| `ctest -L render` | **10/10 pass**: Engine 002 (`audio_test`), 003–010, 014. These only show that each program runs to completion and writes its WAV files |
-| Recovered branch as pushed (before my changes) | Built and ran all 17 of its targets: every one exited 0 |
-| Rendered audio analysis | Re-measured the Poly chord-boundary click (B1) on the new Engine 003/004 renders: still present |
+| `cmake -S . -B build && cmake --build build -j2` | 22 executables, **0 warnings** (`-Wall -Wextra -Wpedantic`; build log searched for "warning" and "error") |
+| `ctest --test-dir build --output-on-failure` | **22/22 pass** |
+| `ctest --test-dir build -L unit` | **12/12 pass**: `dsp_unit_tests`, Engines 011, 012, 013, 015, 016, 017, 018, **019 (50 checks)**, `tape_test`, `transport_test`, `tape_character_test` |
+| `ctest --test-dir build -L render` | **10/10 pass**. These only show that each program runs and writes its WAV files |
+| AddressSanitizer + UndefinedBehaviorSanitizer | Separate Debug build (`-fsanitize=address,undefined -fno-sanitize-recover=all`, leak detection on): **22/22 pass**, no reports, 0 warnings |
+| Render output unchanged | All 16 WAVs written by the render tests are **byte-identical** to those from `e54db9b` |
+| Mutation checks on `engine_019` | Four deliberate faults were each caught by several checks: choke disabled; fade replaced by an abrupt stop; retrigger fade removed; activity sync removed. A planted allocation in `processBlock` was caught by check 41. Removing the generation check was **not** caught; see §6.8 |
 | Listening test | **Not done** (no audio playback in this environment) |
-| Hardware | **Not done, deliberately**: nothing flashed or connected |
+| FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
 ## 3. Component status
 
 | Component | Engine | Status | Notes |
 |---|---|---|---|
 | `audio_engine.h`, `StereoMixer` | 001–003 | Working prototype | Unit-tested. `StereoMixer` is no longer used by any demo |
-| Synths + ADSR (`instruments/synthesizers/`) | 002–004 | Prototype with known bugs | B1–B4 below. **Unchanged** on this branch |
+| Synths + ADSR (`instruments/synthesizers/`) | 002–004 | Prototype with known bugs | B1–B4 below. **Unchanged** |
 | `LayeringMixer` | 004 | Working prototype | No output clamp (the demo's WAV writer clamps). No unit test |
-| Tape machine / transport / streaming | 005–014 | Working prototype | Assertion tests in 011–013 and the three `tape_*_test` programs. 005–010 and 014 are renders or benchmarks |
-| `SamplePlayer` | 015 | Working prototype, tested | Linear interpolation, reverse, pitch/rate. Stops instantly (no fade) |
-| `SampleSliceMap` | 016 | Working prototype, tested | Uses `std::vector` |
-| `SampleVoiceManager<N>` | 017 | Working prototype, tested | Fixed pool, oldest-voice stealing. `processBlock` **adds** into the output, so the caller must zero the buffer |
-| `DrumPadBank<27>` | 018 | Working prototype, tested | Produces a `TriggerEvent` with `chokedPads`. Its `active` flag is logical only |
-| Pad bank → voices, real choke | 019 | **Not started** | Next task |
+| Tape machine / transport / streaming | 005–014 | Working prototype | Assertion tests in 011–013 and the three `tape_*_test` programs. 005–010 and 014 are renders or benchmarks. **Unchanged** |
+| `SamplePlayer` | 015 | Working prototype, tested | Linear interpolation, reverse, pitch/rate. **Unchanged** |
+| `SampleSliceMap` | 016 | Working prototype, tested | Uses `std::vector`. **Unchanged** |
+| `SampleVoiceManager<N>` | 017 (+019) | Working prototype, tested | Fixed pool, oldest-voice stealing. `processBlock` **adds** into the output. Engine 019 added slot-level control (§6.2) without changing the original API's results |
+| `DrumPadBank<27>` | 018 | Working prototype, tested | **Unchanged**. Its `active` flag is now kept in sync by `DrumEngine` |
+| `DrumEngine<N>` | 019 | Working prototype, tested | New; see §6 |
 | Event/MIDI layer, sequencing | — | Not started | |
 | Firmware (HAL, drivers, display, pads, storage, boot) | — | Not started | Depends on hardware facts that are not yet documented |
 
@@ -76,62 +77,254 @@ by request. They were first reported in `eb93203`.
 
 ## 5. Other issues found in the recovered code
 
-- **R1: Engines 016–018 were missing from the build.** Their sources were recovered, but `CMakeLists.txt` had no targets for them, so the slice map, voice manager and pad-bank tests never ran. **Fixed on this branch** by adding the three targets and registering them in CTest. All three pass.
-- **R2: there was no CTest registration.** Test programs existed, but `ctest` ran nothing. **Fixed:** 21 tests, labelled `unit` or `render`.
-- **R3: Engine 003 and Engine 004 have identical source**, apart from the output filename, and produce byte-identical WAVs. Engine 004's banner also says "ENGINE 003". The original Engine 003 (synths in sequence through `StereoMixer`) appears to have been overwritten during recovery. It still exists in `90e8dfb`. Not changed here; the maintainer should decide whether to restore it.
-- **R4: the pad bank's `active` flag never clears by itself.** A pad stays "active" after its sample has finished, until it is choked or stopped. This is harmless for choke decisions (choking a finished pad does nothing), but `isActive()` doesn't mean "sounding". Engine 019 should take sounding state from the voices.
-- **R5: retriggering the same pad stacks voices.** `trigger()` skips the triggering pad when choking (`i == padIndex`), so hitting the same pad again plays a second voice on top of the first. Engine 019 needs an explicit retrigger policy.
-- **R6: housekeeping.**
+- **R1: Engines 016–018 were missing from the build.** Fixed in `e54db9b` (targets plus CTest).
+- **R2: there was no CTest registration.** Fixed in `e54db9b`. Engine 019 brings the total to 22 tests.
+- **R3: Engine 003 and Engine 004 are identical. Investigated; left unchanged.**
+  - Evidence:
+    - In `e75b325`, `tests/audio/engine_003.cpp` and `engine_004.cpp` differ only in the output WAV filename, and they render byte-identical audio.
+    - `90e8dfb:tests/audio/engine_003.cpp` (blob `41a9700`) is different code: synths in sequence (0–4 s mono, 4–8 s FM, 8–12 s poly) through `StereoMixer`, with the banner "Independent Synthesizer Architecture".
+    - The current files (blobs `5778358` / `69e935e`) layer all three synths through `LayeringMixer`, with the banner "Layered Synthesizer Architecture". **Both** current files print "DATABREAKs AUDIO ENGINE 003".
+    - `git log --follow` traces `engine_004.cpp` back to `90e8dfb`'s `engine_003.cpp`.
+  - Interpretation: the layered version was probably made by editing `engine_003.cpp` in place in Codespaces, and then copied to `engine_004.cpp`. The original Engine 003 is recoverable, but it is **not clear** whether the in-place change to 003 was intended. Restoring it would also change Engine 003's rendered audio.
+  - Decision: following the rule not to guess, both files are left unchanged.
+  - To restore the original deliberately (as its own commit), run `git show 90e8dfb:tests/audio/engine_003.cpp > tests/audio/engine_003.cpp`. It still compiles against the current headers, because `StereoMixer` still exists. Engine 004 keeps the layered version.
+- **R4: the pad bank's `active` flag never cleared by itself.** **Resolved by `DrumEngine`**, which clears it when the pad no longer has a playing voice (§6.6). `DrumPadBank` itself is unchanged, so code that uses the bank directly still gets the old behaviour.
+- **R5: retriggering the same pad stacked voices.** **Resolved by `DrumEngine`'s explicit retrigger policy** (§6.5).
+- **R6: housekeeping (open).**
   - There is a stray empty file at `.devcontainer/tests/audio/audio_test.cpp`.
   - There is no LICENSE, although the project is described as open source.
   - There is no README and no `.gitignore` (`build/`, `*.wav`).
 
-## 6. Engine 019: pad bank → audio voices with real choke groups
+## 6. Engine 019: 27-pad drum voice integration
 
-The building blocks are already there:
+Files:
 
-- `DrumPadBank::trigger()` provides the sample pointer, region, `playbackRate`, `volume`, `reverse` and `chokedPads`.
-- `SampleVoiceManager::trigger()` accepts exactly those parameters.
+- `core/audio/drum_engine.h` (new);
+- `core/audio/sample_voice_manager.h` (extended);
+- `tests/audio/engine_019.cpp` (new);
+- `CMakeLists.txt` (one target, plus one entry each in the warning loop and the `unit` test list).
 
-What's missing:
+### 6.1 Architecture and public API
 
-1. **Pad ownership on voices.** Add a `padIndex` (or "no pad") to each voice, plus queries such as `voicesForPad(p)` and `isPadSounding(p)`.
-2. **Choke = a fast fade, not an instant stop.** `SamplePlayer::stop()` cuts at full amplitude, which clicks. Give each voice a short linear or exponential gain ramp (about 1–5 ms; a constant to be agreed), and free the voice when the ramp reaches 0.
-3. **A thin integration layer** (for example `DrumPadEngine` / `PadVoiceRouter`, a new header) that:
-   - calls `bank.trigger(pad, velocity, event)`;
-   - for each `event.chokedPads[i]`, fades out every voice owned by pad `i`;
-   - applies the retrigger policy for the same pad (R5);
-   - starts a voice tagged with `event.padIndex`;
-   - exposes `processBlock`, and clears the bank's `active` flag when a pad's last voice ends (R4).
-4. **Keep 015–018 behaviour intact.** Engines 015–018 must keep passing unchanged. Prefer adding to the existing classes over changing their behaviour.
-5. **Tests (Engine 019, `unit` label), each one failing before the work:**
-   - a pad triggers sound with the correct gain and rate;
-   - triggering a pad in choke group G fades every other sounding pad in G to silence within the fade length;
-   - no sample-to-sample step above a threshold during a choke;
-   - pads in group 0, or in other groups, are unaffected;
-   - the same-pad retrigger policy works as specified;
-   - stealing under a full pool is predictable;
-   - velocity 0 and invalid pad indices (≥ 27) do nothing;
-   - all 27 pads can be addressed;
-   - no allocation in `processBlock`.
+`template <std::size_t VoiceCount = 16> class DrumEngine` owns:
+
+- a `DrumPadBank<27>`;
+- a `SampleVoiceManager<VoiceCount>`;
+- a fixed `std::array` of ownership records, one per voice slot.
+
+Pad count (27, physical) and voice count (polyphony, a compile-time
+parameter) are independent. The default of **16 voices** matches
+`SampleVoiceManager`'s existing default. It is a starting value, not tuned for
+any target.
+
+| Group | Members |
+|---|---|
+| Constants | `PadCount` (27), `npos`, `DefaultReleaseFadeFrames` (240), `MaxReleaseFadeFrames` (48000), `padCount()`, `voiceCapacity()` |
+| Pad setup (forwarded to the bank) | `assignSample`, `clearSample`, `setRegion`, `setVolume`, `setPitch`, `setVelocitySensitivity`, `setChokeGroup`, `setReverse`, `getPad` |
+| Engine settings | `setReleaseFadeFrames` / `releaseFadeFrames` (clamped to 1…48000), `setRetriggerPolicy` / `retriggerPolicy` |
+| Playing | `trigger(pad, velocity)` → slot index, or `npos` if nothing played |
+| Stopping | `releasePad(pad)`, `releaseAll()` (fade); `stopPad(pad)`, `stopAll()` (immediate) |
+| Audio | `processBlock(StereoFrame* out, std::size_t n)`: **adds** into `out`; ignores a null `out` or `n == 0` |
+| Queries | `voiceOwner(slot)`, `padVoiceCount`, `padReleasingVoiceCount`, `padVoices(pad, slots, max)`, `isPadActive`, `isPadPlaying`, `isPadReleasing`, `activeVoiceCount`, `bank()` / `voices()` (read-only) |
+
+The trigger flow inside `trigger(pad, velocity)`:
+
+1. Reject a pad index of 27 or more, and a velocity of 0 or below. Velocity above 127 is clamped to 127, as in `DrumPadBank`.
+2. Call `DrumPadBank::trigger`. This validates the sample and region, and computes volume (velocity sensitivity), playback rate (pitch), reverse, and `chokedPads`.
+3. Choke (§6.4).
+4. Apply the retrigger policy (§6.5).
+5. Pick a slot (§6.3).
+6. Call `SampleVoiceManager::triggerInSlot` with the event's sample, region, volume, rate and reverse flag.
+7. Record ownership and sync pad activity.
+
+The existing pad behaviour (velocity, pitch, volume, reverse, regions, choke
+decisions) still comes from `DrumPadBank`, and is not reimplemented.
+
+### 6.2 Changes to `SampleVoiceManager` (Engine 017)
+
+These are additions only. The original `trigger`, `processBlock`, `stopAll`,
+`activeVoiceCount` and `capacity` give the same results as before: a voice
+that is never released is mixed with a gain of exactly `volume * 1.0`.
+Engine 017 still passes all 22 checks, and all render WAVs are byte-identical.
+
+New members:
+
+- `triggerInSlot`;
+- `releaseVoice(slot, fadeFrames)`;
+- `stopVoice`;
+- `isVoiceActive`, `isVoiceReleasing`, `voiceReleaseGain`, `voiceGeneration`, `voiceAge`;
+- `npos`.
+
+Each voice gained `releaseGain`, `releaseStep`, `releasing` and `generation`.
+
+One deliberate behaviour change: a non-finite volume (NaN or infinity) passed
+to `trigger` is now treated as 0. Before, `std::clamp` passed NaN through,
+which produced NaN audio.
+
+### 6.3 Voice capacity and stealing (deterministic)
+
+When `trigger` needs a slot, it takes:
+
+1. the lowest-numbered free slot;
+2. otherwise the **oldest voice that is already releasing**;
+3. otherwise the **oldest voice overall**.
+
+Options 2 and 3 replace the old sound at once (a hard steal, which can
+click), because one slot cannot hold both a fade and a new sound. The
+previous owner's ownership record is cleared and its activity updated in the
+same call. Check 27 verifies the whole order with a 2-voice pool.
+
+### 6.4 Choke behaviour
+
+When a pad in nonzero group G is hit, every voice owned by a pad named in
+`TriggerEvent::chokedPads` starts its release fade. So does every voice of any
+other pad in G that still has a playing voice.
+
+The second rule exists because `DrumPadBank::assignSample` and `clearSample`
+clear a pad's `active` flag even while it is sounding (check 22b). Without it,
+such a pad would escape the next choke.
+
+Voices outside G, and pads in group 0, are never choked (checks 20 and 21).
+The new hit starts at once; it doesn't wait for the fades.
+
+### 6.5 Same-pad retrigger policy
+
+`RetriggerPolicy::FadeAndRetrigger` is the default. When a pad is hit again:
+
+- its existing voices start the release fade, keeping their ownership until the fade ends;
+- a new voice starts immediately, with its own ownership record (checks 23–26);
+- other pads are unaffected.
+
+`RetriggerPolicy::Overlap` layers voices without fading, and is selectable with
+`setRetriggerPolicy`. The enum leaves room for more modes, such as "mono hard
+cut" or "ignore while playing".
+
+### 6.6 Release fade
+
+The fade is **linear**:
+
+- It starts at the voice's current gain *g* and lowers it by *g* / `fadeFrames` after each rendered frame.
+- Both channels are scaled by the same gain.
+- When the gain reaches 0 (within 1e-12), the voice is stopped and its slot freed.
+
+The default is **240 frames = 5 ms at 48 kHz**. With *g* = 1, the frames
+output during the fade are 1, 1 − 1/240, …, 1/240, and then silence. The
+largest step is 1/240 of full scale (checks 35 and 36).
+
+A second release request on a voice that is already fading keeps the steeper
+of the two slopes. So the fade can only speed up: it never slows down, restarts
+or gets louder (check 35b).
+
+The fade is applied inside `SampleVoiceManager::processBlock`, so sample
+playback code is not duplicated.
+
+### 6.7 Pad activity synchronisation
+
+- `isPadActive(p)`: pad *p* owns at least one live voice, playing or releasing.
+- `isPadPlaying(p)`: at least one of those voices is not releasing.
+- `isPadReleasing(p)`: the pad still sounds, but only through fading voices.
+- `DrumPadBank::isActive(p)` (through `bank()`): kept equal to "has a playing voice". This is what the bank uses to decide which pads to choke.
+
+Activity is updated:
+
+- immediately on `trigger`, steal, `releasePad`, `stopPad` and `stopAll`;
+- at the **end** of each `processBlock`, for voices that finished naturally or finished fading.
+
+Within a block, a voice that ends partway through is still reported as active
+until the block returns.
+
+### 6.8 Ownership model
+
+Each slot has `{pad, generation}`. `SampleVoiceManager` increments a slot's
+generation every time the slot starts a new sound. An ownership record counts
+only if:
+
+- its generation matches the slot's current generation; and
+- the voice is still active.
+
+Records that no longer count are cleared after each block, and whenever their
+slot is reused.
+
+Ownership is never inferred from voice order. The generation check is a
+second safeguard: the voice pool is private to `DrumEngine`, and `trigger`
+always clears a slot's record before reusing the slot. That means no public
+sequence of calls can produce a stale record for the generation check to
+catch. A mutation that removes it is therefore not detected by
+`engine_019`. Check 14 verifies the counter at the voice-manager level instead.
+
+### 6.9 Real-time safety
+
+`trigger`, `processBlock`, `releasePad`, `releaseAll`, `stopPad` and `stopAll`:
+
+- use only fixed-size `std::array` state;
+- allocate no heap memory (check 41 counts global `operator new` calls over 50 rounds of triggers, chokes and blocks, plus a release and a stop);
+- take no locks, perform no I/O and throw no exceptions.
+
+There is no internal synchronisation, so configuration, triggers and
+`processBlock` must be called from the same thread. Hand-off to a separate
+audio thread (for example with a lock-free event queue) is future work.
+
+Sample vectors are borrowed by pointer. They must outlive every voice that
+plays them and must not be resized while one is playing. `clearSample` and
+`assignSample` don't stop voices that are already playing the old sample.
+
+### 6.10 Test coverage: `tests/audio/engine_019.cpp`, 50 checks, all passing
+
+All checks use deterministic synthetic samples, with exact or 1e-9 tolerance
+assertions, and the program exits non-zero on any failure.
+
+- Checks 01–40 follow the Engine 019 test plan:
+  - basic integration (01–09);
+  - ownership (10–15);
+  - choke (16–22);
+  - retrigger and pool exhaustion (23–27);
+  - activity and stopping (28–33);
+  - audio correctness and safety (34–40).
+- Extra checks:
+  - 07b: velocity above 127 is clamped;
+  - 22b: a choke still works after `assignSample` while the pad is sounding;
+  - the default retrigger policy;
+  - the `Overlap` policy;
+  - `releaseAll`;
+  - the default fade length of 240;
+  - 35b: re-release never raises the gain;
+  - 37b: `processBlock` adds into the buffer;
+  - 41: no heap allocation;
+  - the fade length is clamped to at least 1.
+- Check 38 renders the same choke scenario with block sizes 1, 3, 7, 16, 63 and 64, and requires bit-identical output.
+
+### 6.11 Known limitations and remaining work
+
+- A hard steal (pool exhausted, nothing releasing) still cuts a voice without a fade. A future option is to reserve a voice for fades, or to steal the quietest voice.
+- Activity changes caused by audio are only seen at block boundaries.
+- There is no event queue or thread hand-off, and no sample-accurate trigger timing inside a block: triggers take effect at the start of the next `processBlock`.
+- Per-pad pan, output routing and a pad mixer are not implemented. Voice gain is `pad volume × velocity curve`, as defined by `DrumPadBank`.
+- Voices use `double` and linear interpolation, the same as `SamplePlayer`. Suitability for the eventual target is unknown until the hardware is documented.
+- Nothing has been listened to, and nothing has been run on an FM-1.
 
 ## 7. Recommended next steps (in order)
 
-1. Review and merge this branch into the recovered line of development.
-2. Engine 019, as described in §6.
-3. Decide whether to restore the original Engine 003 (R3).
-4. Add LICENSE, README and `.gitignore`, and remove the stray empty file (R6).
-5. Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators, in separate commits with tests that fail first. Keep the stateless envelope until the demos are migrated, so existing renders stay reproducible.
+1. Review Engine 019 (branch `claude/engine-019-prep-transfer`).
+2. Decide on R3 (restore the original Engine 003 or not).
+3. Add LICENSE, README and `.gitignore`, and remove the stray empty file (R6).
+4. Engine 020 candidates:
+   - a time-stamped event queue so triggers land at an exact frame inside a block;
+   - per-pad pan and a pad mixer bus;
+   - a softer voice-steal policy.
+5. Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators, in separate commits with tests that fail first.
 6. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
 
-## 8. Changes on this branch (relative to `e75b325`)
+## 8. Change log on this branch
 
-- Ported from `eb93203` (cherry-picked with `-x`): `CLAUDE.md`, `docs/PROGRESS_REPORT.md` and `tests/unit/dsp_unit_tests.cpp`. The two documents were updated for the recovered code.
-- `CMakeLists.txt`: **the recovered file was kept in full**, and only these were added:
-  - the `databreaks_engine_016`, `databreaks_engine_017` and `databreaks_engine_018` targets;
-  - the `databreaks_dsp_unit_tests` target;
-  - all four added to the warning-flag loop;
-  - `enable_testing()` and 21 labelled CTest entries.
+- **`e54db9b`** (relative to `e75b325`):
+  - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
+  - `CMakeLists.txt`: added the Engine 016–018 targets, the unit-test target and 21 labelled CTest entries.
 
-  `eb93203`'s older `CMakeLists.txt` was **not** used.
-- No synth, DSP, tape, sampler or pad-bank code was changed, so rendered audio is unchanged.
+  No DSP code was changed.
+- **Engine 019 commit:**
+  - added `core/audio/drum_engine.h` and `tests/audio/engine_019.cpp`;
+  - extended `core/audio/sample_voice_manager.h` (additions only, plus the NaN-volume guard);
+  - `CMakeLists.txt`: added `databreaks_engine_019` to the targets, the warning loop and the `unit` tests;
+  - updated `CLAUDE.md` and this report.
+
+  No synth, tape, `SamplePlayer`, `SampleSliceMap` or `DrumPadBank` code changed.

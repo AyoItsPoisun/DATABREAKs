@@ -29,6 +29,7 @@ add_executable(databreaks_engine_015 tests/audio/engine_015.cpp)
 add_executable(databreaks_engine_016 tests/audio/engine_016.cpp)
 add_executable(databreaks_engine_017 tests/audio/engine_017.cpp)
 add_executable(databreaks_engine_018 tests/audio/engine_018.cpp)
+add_executable(databreaks_engine_019 tests/audio/engine_019.cpp)
 
 # Assertion-based host unit tests for the synth/DSP headers.
 add_executable(databreaks_dsp_unit_tests tests/unit/dsp_unit_tests.cpp)
@@ -63,6 +64,7 @@ foreach(target
     databreaks_engine_016
     databreaks_engine_017
     databreaks_engine_018
+    databreaks_engine_019
     databreaks_dsp_unit_tests
     databreaks_tape_test
     databreaks_transport_test
@@ -97,6 +99,7 @@ foreach(name
     engine_016
     engine_017
     engine_018
+    engine_019
     tape_test
     transport_test
     tape_character_test
