@@ -169,6 +169,12 @@ public:
 
     std::size_t stealFadeFrames() const { return stealFadeFrames_; }
 
+    // Engine 021: drum bus level, applied once to the summed drum voices as
+    // they are added to the output (SampleVoiceManager::setOutputGain).
+    // Clamped to [0, 2]; non-finite values are ignored. Default 1.0.
+    void setOutputLevel(double level) { voices_.setOutputGain(level); }
+    double outputLevel() const { return voices_.getOutputGain(); }
+
     void setRetriggerPolicy(RetriggerPolicy policy) {
         retriggerPolicy_ = policy;
     }

@@ -21,9 +21,13 @@ namespace databreaks {
 // fades out the slot's current sound and starts the queued sound on the
 // frame right after the fade ends, so a full pool can be stolen from without
 // a click and without exceeding VoiceCount. Every started or queued sound
-// gets a unique, never-reused sound id. The original API (trigger, processBlock, stopAll,
-// activeVoiceCount, capacity) behaves exactly as before: a voice that is never
-// released is mixed with a gain of exactly 1.0.
+// gets a unique, never-reused sound id. Engine 021 added an output gain
+// (setOutputGain) applied once to the summed voices of each frame; at its
+// default of 1.0 the output is bit-identical to before.
+//
+// The original API (trigger, processBlock, stopAll, activeVoiceCount,
+// capacity) behaves exactly as before: a voice that is never released is
+// mixed with a gain of exactly 1.0.
 //
 // Sample lifetime: voices keep a pointer to the caller's sample vector. The
 // vector must outlive every voice that references it and must not be resized
@@ -280,8 +284,8 @@ public:
                 }
             }
 
-            output[frame].left += left;
-            output[frame].right += right;
+            output[frame].left += left * outputGain;
+            output[frame].right += right * outputGain;
         }
     }
 
@@ -333,10 +337,24 @@ public:
         return VoiceCount;
     }
 
+    // Engine 021: gain applied to the summed voices before they are added to
+    // the output buffer (a bus level). Clamped to [0, 2]; non-finite values
+    // are ignored. Takes effect from the next processed frame.
+    void setOutputGain(double gain) {
+        if (std::isfinite(gain)) {
+            outputGain = std::clamp(gain, 0.0, 2.0);
+        }
+    }
+
+    double getOutputGain() const {
+        return outputGain;
+    }
+
 private:
     std::array<Voice, VoiceCount> voices{};
     unsigned long voiceCounter = 0;
     std::uint64_t soundCounter = 0;
+    double outputGain = 1.0;
 
     static void silenceVoice(Voice& voice) {
         voice.player.stop();
