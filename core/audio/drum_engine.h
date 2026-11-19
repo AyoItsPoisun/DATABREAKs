@@ -365,6 +365,52 @@ public:
     // Safe to read from either thread.
     std::uint32_t droppedEventCount() const { return queue_.droppedCount(); }
 
+    // ---- Scheduled events (Engine 025, AUDIO THREAD ONLY) -------------------
+    //
+    // For a scheduler that runs on the audio thread (the Engine 025
+    // sequencer), which must not push into the single-producer queue above.
+    // Events are applied during the NEXT processBlock() call at their exact
+    // frameOffset (0 .. frameCount - 1; larger offsets are clamped to the
+    // last frame and counted in clampedScheduledCount()). They are merged
+    // with queued events in frame order; at the same frame, scheduled
+    // events come first, in the order they were scheduled. Queued events
+    // keep their own Engine 020 timing rule unchanged. At most
+    // ScheduledCapacity events per block; beyond that the call returns
+    // false and droppedScheduledCount() increases.
+
+    static constexpr std::size_t ScheduledCapacity = 1024;
+
+    bool scheduleTrigger(std::size_t pad, int velocity, std::size_t frameOffset) {
+        if (pad >= PadCount || velocity <= 0) {
+            return false;
+        }
+        return scheduleEvent({DrumEventType::Trigger, pad, velocity, frameOffset});
+    }
+
+    bool scheduleEvent(const DrumEvent& event) {
+        if (event.type != DrumEventType::StopAll && event.pad >= PadCount) {
+            return false;
+        }
+        if (scheduledCount_ == ScheduledCapacity) {
+            ++droppedScheduled_;
+            return false;
+        }
+        // Keep frame order; equal offsets stay in scheduling order.
+        std::size_t i = scheduledCount_;
+        while (i > 0 && scheduled_[i - 1].frameOffset > event.frameOffset) {
+            scheduled_[i] = scheduled_[i - 1];
+            --i;
+        }
+        scheduled_[i] = event;
+        ++scheduledCount_;
+        return true;
+    }
+
+    std::size_t pendingScheduledCount() const { return scheduledCount_; }
+    std::uint64_t processedScheduledCount() const { return processedScheduled_; }
+    std::uint64_t droppedScheduledCount() const { return droppedScheduled_; }
+    std::uint64_t clampedScheduledCount() const { return clampedScheduled_; }
+
     // ---- Audio (audio thread) ---------------------------------------------------
 
     // Mixes frameCount stereo frames of all voices INTO output (adds to the
@@ -381,23 +427,63 @@ public:
             return;
         }
 
-        std::size_t position = 0;
-        DrumEvent event;
+        // Two event sources, merged in frame order:
+        //   * queued events (producer thread), FIFO, each at
+        //     min(max(frameOffset, previous queued event's frame), n - 1)
+        //     exactly as before Engine 025;
+        //   * scheduled events (audio thread, Engine 025), already sorted,
+        //     at their own frameOffset (clamped to n - 1).
+        // At equal frames scheduled events are applied first.
+        std::size_t position = 0;       // frames rendered so far
+        std::size_t queuePosition = 0;  // the queued events' own clamp
+        std::size_t next = 0;           // next scheduled event
+        std::size_t popped = 0;
+        DrumEvent held;
+        bool hasHeld = false;
+        std::size_t heldAt = 0;
 
-        for (std::size_t applied = 0;
-             applied < EventQueue::capacity() && queue_.pop(event);
-             ++applied) {
-            const std::size_t at = std::min(
-                std::max(event.frameOffset, position), frameCount - 1);
+        for (;;) {
+            if (!hasHeld && popped < EventQueue::capacity() &&
+                queue_.pop(held)) {
+                ++popped;
+                hasHeld = true;
+                heldAt = std::min(std::max(held.frameOffset, queuePosition),
+                                  frameCount - 1);
+                queuePosition = heldAt;
+            }
+            const bool hasScheduled = next < scheduledCount_;
+            if (!hasScheduled && !hasHeld) {
+                break;
+            }
+
+            std::size_t scheduledAt = 0;
+            if (hasScheduled) {
+                scheduledAt = scheduled_[next].frameOffset;
+                if (scheduledAt > frameCount - 1) {
+                    scheduledAt = frameCount - 1;
+                    ++clampedScheduled_;
+                }
+            }
+            const bool takeScheduled =
+                hasScheduled && (!hasHeld || scheduledAt <= heldAt);
+            const std::size_t at = takeScheduled ? scheduledAt : heldAt;
 
             if (at > position) {
                 voices_.processBlock(output + position, at - position);
                 position = at;
             }
 
-            applyEvent(event);
-            ++processedEvents_;
+            if (takeScheduled) {
+                applyEvent(scheduled_[next]);
+                ++next;
+                ++processedScheduled_;
+            } else {
+                applyEvent(held);
+                hasHeld = false;
+                ++processedEvents_;
+            }
         }
+        scheduledCount_ = 0;
 
         voices_.processBlock(output + position, frameCount - position);
         syncOwnership();
@@ -505,6 +591,11 @@ private:
     Bank bank_;
     Voices voices_;
     EventQueue queue_;
+    std::array<DrumEvent, ScheduledCapacity> scheduled_{};
+    std::size_t scheduledCount_ = 0;
+    std::uint64_t processedScheduled_ = 0;
+    std::uint64_t droppedScheduled_ = 0;
+    std::uint64_t clampedScheduled_ = 0;
     std::array<Ownership, VoiceCount> owners_{};
 
     std::size_t releaseFadeFrames_ = DefaultReleaseFadeFrames;

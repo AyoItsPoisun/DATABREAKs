@@ -15,7 +15,7 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–024).
+019–025).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -23,13 +23,13 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 024
+### Components through Engine 025
 
 | Header | Purpose | Tested by |
 |---|---|---|
 | `core/audio/audio_engine.h` | 48 kHz stereo constants, `StereoFrame`, `midiToHz`, `clampAudio` | `dsp_unit_tests` |
 | `core/audio/mixer.h` | `StereoMixer` (master gain + hard clip). Since Engine 021 it is the master stage of `AudioPipeline` | `dsp_unit_tests`, `engine_021` |
-| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023, tape added in Engine 024), then the `StereoMixer` master stage; frame-accurate queued synth note events | `engine_021` (17), `engine_022` (29), `engine_023` (48), `engine_024` (35), the render demos |
+| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023, tape added in Engine 024), then the `StereoMixer` master stage; frame-accurate queued synth note events; audio-thread scheduled synth events and the sequencer (Engine 025) | `engine_021` (17), `engine_022` (29), `engine_023` (48), `engine_024` (35), `engine_025` (38), the render demos |
 | `core/audio/layering_mixer.h` | `LayeringMixer`: mono + FM + poly layer volumes, master | render demos 003/004 only |
 | `instruments/synthesizers/{mono,fm,poly}_synth.h`, `synth_parameters.h` | Original `MonoSynth`, `FMSynth`, `PolySynth` and stateless `calculateEnvelope` (Engines 002–004). **Unchanged** (findings B1–B4 still apply to them) so the 002–004 reference renders stay byte-identical | `dsp_unit_tests`, render demos 002–004 |
 | `instruments/synthesizers/synth_voices.h` | Stateful `AdsrEnvelope`, `MonoVoice`, `FmVoice`, `PolyVoice`: same parameter structs and formulas, with phase accumulators and stateful envelopes (fix B1–B4); `sanitized()` parameter guards (Engine 022) | `engine_022` (matches the originals to ~1e-12) |
@@ -42,8 +42,13 @@ flashable FM-1 firmware.
 | `core/audio/sample_slice_map.h` | `SampleSliceMap`: even slicing + movable boundaries (Engine 016) | `engine_016` |
 | `core/audio/sample_voice_manager.h` | `SampleVoiceManager<N>`: fixed voice pool, oldest-voice stealing, mixing (Engine 017). Engine 019 added slot-addressed `triggerInSlot`, `releaseVoice` (linear fade), `stopVoice`, per-slot queries and a per-slot generation counter. Engine 020 added queued sounds (`queueInSlot`, `cancelPending`, `hasPending`) and unique sound ids. Engine 021 added `setOutputGain` (bus level, default 1.0). The original API behaves as before | `engine_017`, `engine_019`, `engine_020` |
 | `core/audio/drum_pad_bank.h` | `DrumPadBank<27>`: per-pad sample/region, volume, pitch, velocity sensitivity, reverse, choke groups → `TriggerEvent` (Engine 018). Unchanged by Engine 019 | `engine_018` |
-| `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16, EventCapacity = 256>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019); click-free voice stealing, frame-accurate queued events, statistics (Engine 020) | `engine_019` (50 checks), `engine_020` (29 checks) |
+| `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16, EventCapacity = 256>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019); click-free voice stealing, frame-accurate queued events, statistics (Engine 020); audio-thread `scheduleTrigger`/`scheduleEvent` merged with the queue in frame order (Engine 025) | `engine_019` (50 checks), `engine_020` (29 checks), `engine_025` |
 | `core/audio/drum_event_queue.h` | `DrumEvent` and `DrumEventQueue<N>` (Engine 020); since Engine 022 an alias of `SpscRing<DrumEvent, N>` | `engine_020` (incl. a two-thread test) |
+| `core/audio/synth_event.h` | `SynthTarget`, `SynthEventType`, `SynthEvent` — moved unchanged out of `audio_pipeline.h` in Engine 025 (the pipeline includes it) | — |
+| `core/sequencer/musical_time.h` | 960 PPQ ticks, `TimeSignature`, bar/beat/tick conversion (Engine 025) | `engine_025` |
+| `core/sequencer/musical_clock.h` | `MusicalClock`: exact tick↔sample mapping in 128-bit integers, milli-BPM tempo, start/stop/reset (Engine 025) | `engine_025` |
+| `core/sequencer/pattern.h` | `Pattern`: 27 drum lanes × up to 256 steps (velocity, probability, microtiming) + up to 512 synth `NoteEvent`s (Engine 025) | `engine_025` |
+| `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025) | `engine_025` (38 checks) |
 | `core/audio/spsc_ring.h` | `SpscRing<T, N>`: the fixed-capacity lock-free single-producer/single-consumer ring, generalised from Engine 020's queue in Engine 022 (drum and synth events) | `engine_020`, `engine_022` (two-thread tests) |
 | `core/audio/effects/audio_effect.h` | `AudioEffect` interface + `EffectBase<Derived>` (bypass with 20 ms crossfade, wet/dry, reset), `SmoothedValue`, dB helpers (Engine 023) | `engine_023` |
 | `core/audio/effects/equalizer.h` | `Equalizer`: low shelf / mid peak / high shelf + output gain, cookbook biquads (Engine 023) | `engine_023` |
@@ -204,6 +209,35 @@ voice count are independent (default 16 voices, like the manager's default).
   insert effect.
 - Benchmark: `databreaks_engine_024_benchmark` (built, not a CTest test).
 
+### Engine 025 — sequencer foundation (implemented, host-side only)
+
+- `pipeline.sequencer()` owns a `MusicalClock` and one `Pattern`. It runs
+  inside `mixSources()` on the audio thread and is **stopped by default**, so
+  nothing changes until `start()`.
+- **Time:** a tick is 1/960 quarter note. Tempo is integer milli-BPM
+  (20–300 BPM). Tick t is delivered at sample `ceil(x(t))`, where
+  `x(t) = (O + (t − T0)·fs·60000) / (milliBPM·960)`, computed in `__int128`:
+  no drift. Tempo changes take effect at the next tick boundary (one rounding
+  to 1/D sample per change). Never replace this with floating-point
+  accumulation.
+- **Delivery:** the sequencer must not use `post*` (those queues have one
+  producer, a control thread). It uses the audio-thread scheduled paths:
+  `drums().scheduleTrigger()` and `pipeline.scheduleNoteOn/Off()` (1,024 per
+  block each). These are merged with the queues in frame order; at the same
+  frame, scheduled events come before queued ones.
+- **Ordering:** sequencer events at the same sample are note-off → drum (pads
+  0..26) → note-on (mono, FM, poly; by note number).
+- **Probability:** a hash of (seed, loop, lane, step) — never a running
+  random generator — so results are independent of block size. 0 = never,
+  100 = always.
+- **Capacity:** 1,024 triggers + note-ons per block (more are dropped and
+  counted), 256 sounding sequenced notes, note-offs never dropped. Transport
+  queue: 63 commands from ONE other thread.
+- **Threading:** pattern editing, clock settings and direct transport calls
+  are audio-thread only (or while stopped). `postTransport()` is the only
+  cross-thread entry.
+- Benchmark: `databreaks_engine_025_benchmark`.
+
 
 ## Hardware constraints and safety rules
 
@@ -231,7 +265,8 @@ voice count are independent (default 16 voices, like the manager's default).
 
 ```
 core/audio/                 engine-wide types, mixers, tape, sampler, pads, pipeline
-core/audio/effects/         EQ, compressor, soft clipper, distortion, reverb, chain
+core/audio/effects/         EQ, compressor, soft clipper, tape, distortion, reverb, chain
+core/sequencer/             musical time, clock, pattern, sequencer (Engine 025)
 instruments/synthesizers/   mono / FM / poly synths, ADSR
 tests/audio/engine_NNN.cpp  one program per engine milestone (render demo or assertion test)
 tests/audio/tape_*_test.cpp assertion tests for tape components
@@ -247,7 +282,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 31 tests
+ctest --test-dir build --output-on-failure          # all 33 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 

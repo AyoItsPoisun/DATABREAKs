@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-19 for Engine 024 on branch `claude/engine-019-prep-transfer`.
-Engine 024 starts from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-19 for Engine 025 on branch `claude/engine-019-prep-transfer`.
+Engine 025 starts from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -16,11 +16,12 @@ History of this report:
 - **`100a8e1`:** updated for Engine 021 (unified audio pipeline).
 - **`d326959`:** updated for Engine 022 (synthesizer integration); the outcomes of findings B1–B4 were added in §4.1.
 - **`7a1ced6`:** updated for Engine 023 (effects engine).
-- **Engine 024 commit:** updated for Engine 024 (tape in the effects chain).
+- **`3bdd248`:** updated for Engine 024 (tape in the effects chain).
+- **Engine 025 commit:** updated for Engine 025 (sequencer foundation).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 024**:
+The repository contains host-side C++17 prototypes through **Engine 025**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -33,7 +34,8 @@ The repository contains host-side C++17 prototypes through **Engine 024**:
 - a unified audio pipeline (021): drums → drum level → `StereoMixer` master;
 - synthesizer integration (022): stateful mono, FM and poly synths with note-on/off, velocity and pitch bend, as pipeline sources alongside the drums. Findings B1–B4 are fixed in the new voices;
 - an effects engine (023): EQ, compressor, soft clipper, distortion and reverb in an ordered chain on the combined bus, between the sources and the master;
-- **tape in the effects chain** (024): the existing `TapeMachine` runs as a chain effect (`TapeEffect`) between the soft clipper and distortion, with all twelve tape controls.
+- tape in the effects chain (024): the existing `TapeMachine` runs as a chain effect (`TapeEffect`) between the soft clipper and distortion, with all twelve tape controls;
+- **a sequencer foundation** (025): an exact musical clock, 27-pad drum and synth-note patterns, and sample-accurate scheduling into the existing instruments, identical for any block size.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -46,15 +48,34 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–024 have been run only on a
+pad scanning, storage or boot code. Engines 019–025 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 024 commit
+### 2.1 Engine 025 commit
 
-Same environment as §2.5.
+Same environment as §2.6.
+
+| Check | Result |
+|---|---|
+| Default build | 37 executables (33 registered tests + the Engine 020, 023, 024 and 025 benchmarks), **0 warnings** (`-Wall -Wextra -Wpedantic`; `__int128` is marked `__extension__`) |
+| `ctest --test-dir build --output-on-failure` | **33/33 pass** (the 31 existing tests plus `engine_025` and `render_engine_025_render`) |
+| `-L unit` / `-L render` | **18/18** / **15/15 pass** |
+| `engine_025` | **38/38 checks**. `engine_017` 22, `engine_019` 50, `engine_020` 29, `engine_021` 17, `engine_022` 29, `engine_023` 48 and `engine_024` 35: all passing and unchanged |
+| Release `-O3 -DNDEBUG` | **0 warnings, 33/33 pass** |
+| ASan + UBSan (Debug, leak detection on) | **0 warnings, 33/33 pass**, no reports |
+| ThreadSanitizer | Engines 020–025 (including the transport producer-thread test), no reports |
+| Allocation | `engine_025` RT1 and every benchmark row: 0 allocations. Earlier allocation checks still pass |
+| Existing renders | The 16 reference WAVs are byte-identical to `e54db9b`'s; the Engine 021 demo matches the committed WAV; the Engine 022–024 demos match their own renders |
+| New demo | `databreaks_engine_025_demo.wav`: valid, bit-identical for blocks 1/64/256/1000/4096 and across three build types (§12.6) |
+| `git diff --check` | Clean |
+| Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
+
+### 2.2 Engine 024 commit (`3bdd248`)
+
+Same environment as §2.6.
 
 | Check | Result |
 |---|---|
@@ -72,9 +93,9 @@ Same environment as §2.5.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.2 Engine 023 commit (`7a1ced6`)
+### 2.3 Engine 023 commit (`7a1ced6`)
 
-Same environment as §2.5.
+Same environment as §2.6.
 
 | Check | Result |
 |---|---|
@@ -92,9 +113,9 @@ Same environment as §2.5.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.3 Engine 022 commit (`d326959`)
+### 2.4 Engine 022 commit (`d326959`)
 
-Same environment as §2.5.
+Same environment as §2.6.
 
 | Check | Result |
 |---|---|
@@ -111,7 +132,7 @@ Same environment as §2.5.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.4 Engine 021 commit (`100a8e1`)
+### 2.5 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -130,7 +151,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.5 Engine 020 commit (`dfd3164`)
+### 2.6 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -150,7 +171,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.6 Engine 019 commit (`ce44e70`, for reference)
+### 2.7 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -170,10 +191,11 @@ WAVs byte-identical to `e54db9b`.
 | `DrumPadBank<27>` | 018 | Working prototype, tested | **Unchanged**. Its `active` flag is now kept in sync by `DrumEngine` |
 | `DrumEngine<N, E>` | 019, 020 | Working prototype, tested | See §6 and §7 |
 | `DrumEventQueue<N>` | 020 | Working prototype, tested | Lock-free single-producer/single-consumer ring; see §7.4 |
-| `AudioPipeline<V, E, S>` | 021–024 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths → effects chain → master; see §8–§11 |
+| `AudioPipeline<V, E, S>` | 021–025 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths → effects chain → master, driven by the sequencer; see §8–§12 |
+| Sequencer (`core/sequencer/`) | 025 | Working prototype, tested | Musical clock, patterns, sample-accurate scheduling; see §12 |
 | Effects (`core/audio/effects/`) | 023, 024 | Working prototype, tested | EQ, compressor, soft clipper, tape (`TapeEffect`, 024), distortion, reverb, `EffectChain`; see §10 and §11 |
 | `SpscRing<T, N>` | 020, 022 | Working prototype, tested | Generalised drum queue; carries drum and synth events |
-| MIDI byte input, sequencing, effect automation, tape transport as a source | — | Not started | The pipeline's `post*` queues are the hand-off point for input. New sources go into `AudioPipeline::mixSources` |
+| MIDI byte input, recording/overdubbing, pattern banks, effect automation, tape transport as a source | — | Not started | The pipeline's `post*` queues are the hand-off point for input. New sources go into `AudioPipeline::mixSources` |
 | Firmware (HAL, drivers, display, pads, storage, boot) | — | Not started | Depends on hardware facts that are not yet documented |
 
 ## 4. DSP findings (synth/envelope code, carried over unchanged)
@@ -1482,9 +1504,247 @@ chain, in real time.
 - `TapeMachine` allocates with `std::vector` at construction; a target port may want static buffers.
 - All processing is `double`. Nothing has been listened to, and nothing has been run on an FM-1.
 
-## 12. Recommended next steps (in order)
+## 12. Engine 025: sequencer foundation
 
-1. Review Engines 019–024 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022, 023 and 024 demo renders.
+Files:
+
+- new:
+  - in `core/sequencer/`: `musical_time.h`, `musical_clock.h`, `pattern.h`, `sequencer.h`;
+  - `core/audio/synth_event.h`: `SynthTarget`, `SynthEventType` and `SynthEvent`, moved unchanged from `audio_pipeline.h` to avoid an include cycle;
+  - tests: `tests/audio/engine_025.cpp` (`unit`), `tests/audio/engine_025_render.cpp` (`render`), `tests/audio/engine_025_benchmark.cpp` (built, not a test);
+- changed:
+  - `core/audio/drum_engine.h`: scheduled events;
+  - `core/audio/audio_pipeline.h`: scheduled synth events, and the sequencer driven from `mixSources()`;
+  - `CMakeLists.txt`.
+
+No earlier test was changed. The sequencer is stopped by default, and with
+no scheduled events every path is the Engine 024 code. All 16 reference
+WAVs, the committed Engine 021 demo and the Engine 022–024 demos are
+byte-identical.
+
+### 12.1 Audit findings that shaped the design
+
+- **Drum and synth queues have one producer.** `DrumEngine::postTrigger` and `AudioPipeline::postNoteOn/Off` push into SPSC queues meant for one producer thread. A sequencer running on the audio thread cannot also push there without creating a second producer.
+- **Queued offsets are clamped into the current block.** An offset past the block lands on its last frame; it is not deferred to a later block. Each queue holds 255 events per block.
+- **Direct calls are not frame-accurate.** `trigger()` and `noteOn()` apply at the start of the next rendered range.
+
+So a sequencer needed its own audio-thread path that applies events at
+exact frames.
+
+### 12.2 Musical time and the clock
+
+- **Ticks.** A tick is 1/960 of a quarter note (PPQ 960 = 2⁶·3·5). Straight notes to 1/256, triplets and quintuplets are whole ticks: a 16th is 240, a 16th triplet 160, a 32nd 120.
+- **Time signatures.** n/d with n 1–32 and d ∈ {1, 2, 4, 8, 16, 32}. Ticks per beat = 960 × 4 / d; ticks per bar = n × ticks per beat. Bar/beat/tick positions are 0-based.
+- **Tempo.** An integer number of milli-BPM: BPM × 1000, 0.001 BPM resolution, range 20–300 BPM. Invalid values are rejected.
+- **Sample rate.** 8000–192000 Hz is accepted. The pipeline runs at 48 kHz; the clock is tested at 44.1 and 48 kHz.
+- **Conversion.**
+  - With N = fs × 60000 and D = milliBPM × 960, samples per tick = N/D.
+  - Within a tempo segment starting at tick T0, whose exact time is O/D samples: x(t) = (O + (t − T0)·N) / D.
+  - Tick t is delivered at sample ceil(x(t)), the first sample at or after its exact time.
+  - The inverse is `firstTickAtOrAfter(s)`.
+  - All of this uses 128-bit integers, so there is **no per-tick rounding and no drift**.
+- **Tempo changes.** A change takes effect at the first tick boundary at or after the current position. The new segment's origin is the old exact time, rounded once to the new 1/D grid: an error below 1/D of a sample, once per change.
+- **Measured.** After 24 hours at 123.456 BPM and 44.1 kHz, tick 170,665,574 lands within one sample of its exact time and equals the independent formula. A naive running sum of samples-per-tick drifts 12.9 samples over the same span (CL4).
+- **Transport.** `start()`, `stop()` and `reset()` (back to tick 0). The clock advances only while playing.
+
+### 12.3 Pattern model
+
+| Item | Limit |
+|---|---|
+| Drum lanes | 27, one per pad (index 0–26) |
+| Steps per lane | `MaxSteps` 256 |
+| Step size | 60–3840 ticks (1/64 note to whole note) |
+| Length | 1–16 bars of the pattern's time signature, a whole number of steps, at most 256 steps |
+| Drum step | enabled; velocity 1–127; probability 0–100 %; microtiming ±stepTicks/2 |
+| Notes | up to `MaxNotes` 512 synth `NoteEvent`s (target, note 0–127, velocity 1–127, probability, start tick inside the pattern, length 1–61,440 ticks) |
+
+A step is a grid position. A note is a MIDI-style event, and several notes
+can start on the same tick. Invalid indices or values are rejected (`false` or
+`-1`) and change nothing. `clear`, `clearPad`, `clearDrums` and `clearNotes`
+keep the shape. Memory: 127,024 bytes per `Pattern`.
+
+### 12.4 Sequencer and sample-accurate scheduling
+
+`AudioPipeline::mixSources()` calls `sequencer().process(n, sink)` before
+rendering. For the block [s0, s0 + n):
+
+1. Queued transport commands are applied.
+2. After `stop()` or `reset()`, every sounding sequenced note gets a note-off at offset 0.
+3. While playing, the ticks [firstTickAtOrAfter(s0), firstTickAtOrAfter(s0 + n)) are covered:
+   - drum step k of loop L on pad p fires at tick L·len + k·step + micro;
+   - note i starts at L·len + start and ends `length` ticks later, tracked in a 256-entry active list, so note-offs cross loop boundaries correctly.
+4. Events are sorted by **(sample offset, kind, target, pad/note)**. At one sample: note-offs first (a note can be re-struck), then drum triggers in pad order 0..26, then note-ons by target (mono, FM, poly) and note number.
+5. Each event goes to `drums().scheduleTrigger()` or `scheduleNoteOn/Off()` at its exact frame.
+6. The clock advances by n.
+
+**Audio-thread scheduled paths.** `DrumEngine::scheduleTrigger/scheduleEvent`
+and `AudioPipeline::scheduleNoteOn/scheduleNoteOff/scheduleAllNotesOff` are new
+and audio-thread only:
+
+- Each is a fixed list of 1,024 events per block, kept in frame order.
+- Each is merged with its queue inside the same `processBlock` / `mixSynths` call, rendering up to each event's frame.
+- At the same frame, scheduled events come first. Queued events keep their exact earlier rule, computed independently, which is why outputs without scheduled events are bit-identical.
+- Offsets beyond the block clamp to the last frame and are counted. A full list rejects and counts.
+
+**Probability.** A splitmix64 hash of (seed, loop, lane, step), not a running
+generator, so the decision doesn't depend on block size or evaluation order.
+
+- 0 never fires; 100 always fires (1,000 loops each).
+- 50 fired 486 times in 1,000 loops, identically for any block size; a different seed gave 491.
+- A skipped note-on also skips its note-off.
+
+**Capacity and overflow.**
+
+- Each block can hold 1,024 drum triggers and note-ons; extra ones are dropped and counted (`droppedEventCount`).
+- Note-offs have reserved space and are never dropped.
+- At most 256 sequenced notes can sound at once; extra note-ons are dropped and counted.
+- Scheduled lists hold 1,024 per block; anything the instruments could not take is counted in `undeliveredSequencerEventCount()`.
+- The transport queue holds 63 commands.
+- No loop is unbounded: the work per block is bounded by the events in it and the note count.
+
+**Threading.**
+
+- `process()`, pattern editing, clock configuration and `start/stop/reset` are **audio thread only** (or while audio is stopped).
+- `postTransport()` (start, stop, reset, set tempo) may be called from **one** other thread through an SPSC queue, applied at the next block.
+- Drum and synth `post*` queues are unchanged: one producer each.
+- Nothing allocates, locks or does I/O.
+
+### 12.5 Tests: `tests/audio/engine_025.cpp`, 38 checks, all passing
+
+**Clock (CL1–CL9)**
+
+- Exact samples at 120 BPM.
+- 44.1/48 kHz × 60, 90, 120, 140, 123.456, 97.531, 20 and 300 BPM against an independent exact formula, including one hour in.
+- 30.625 samples/tick at 90 BPM / 44.1 kHz.
+- 24-hour drift.
+- `firstTickAtOrAfter` consistency.
+- Bar/beat/tick round-trips in 4/4, 3/4, 7/8, 6/8, 5/4, 12/16 and 1/32.
+- Start/stop/reset.
+- Tempo change at the next tick boundary.
+- Invalid input.
+
+**Patterns (PA1–PA5)**
+
+- Lengths and time signatures.
+- Rejected shapes.
+- Step validation at every boundary.
+- 512-note capacity and order.
+- Clear behaviour.
+
+**Drums (DR1–DR5)**
+
+- All 27 pads at exact samples over two loops.
+- 27 simultaneous hits in pad order.
+- Microtiming, including a negative offset crossing a loop boundary.
+- Probability 0/100.
+- Seeded probability, block-independent.
+
+**Synths (SY1–SY5)**
+
+- FM, mono and poly notes with exact on/off and durations.
+- Overlapping poly notes.
+- Note-offs across the pattern boundary, exact for 50 loops.
+- Off before on at the same sample.
+- `stop()` releases notes.
+
+**Scheduler (SC1–SC6)**
+
+- 1,196 events (7/8, 137.25 BPM, microtiming, probability, notes) identical for blocks 1, 16, 32, 64, 128, 256, 512, 1024 and 4096 (and 777, 1000).
+- Events on block boundaries land at offset 0; events crossing a boundary land in the later block at the exact offset.
+- An over-full block delivers 1,024, drops 56 and counts them.
+- Scheduled-list capacity and invalid input.
+- 10 minutes: 2,400 hits and the clock exactly at bar 300.
+- Same-frame tie order (scheduled before queued), made audible through choke and mono last-note priority.
+
+**Pipeline audio (AU1–AU6)**
+
+- 27 one-frame markers on exactly their samples, and nothing else.
+- Velocity 64 at 64/127 of the pad level.
+- A sequenced choke fades over 4 frames.
+- Sequenced synth notes are bit-identical to hand-scheduled ones.
+- Manual `trigger()` / `postTrigger()` still work while the sequencer runs.
+- Full pipeline audio (drums + 3 synths + all 6 effects) bit-identical for blocks 1, 16, 32, 64, 128, 256, 512, 1024 and 4096.
+
+**Real-time (RT1–RT2)**
+
+- 0 allocations over 3,000 blocks of dense sequencing with transport changes and all effects.
+- Transport commands from a second thread: all applied or counted. ThreadSanitizer is clean.
+
+**Mutation checks, all caught:**
+
+- floor instead of ceil;
+- tempo change not on a tick boundary;
+- offsets ignored;
+- on before off;
+- order-dependent randomness;
+- microtiming ignored;
+- `stop()` not releasing notes;
+- note-off one tick late;
+- queued-before-scheduled ties, for drums and for synths.
+
+The tie mutants were caught only after SC6 was added for this review. One
+equivalent mutant: the `− maxMicro` margin on the first drum loop index is
+redundant, because microtiming of at most half a step can never cross into
+the previous loop.
+
+### 12.6 Render demonstration: `render_engine_025_render`
+
+The demo is an original 4-bar pattern at 118.5 BPM, played entirely by the
+sequencer for 12 s:
+
+- kick on pad 0, snare on pad 9, closed/open hats on pads 13/14 (choke group), rim on pad 26;
+- swing (+40 ticks on off-16ths) and probability ghost notes (55 % hats, 35 % rim);
+- a mono bass pulse, FM melody and poly chords;
+- EQ, compressor, tape and reverb on.
+
+It is rendered with blocks 1, 64, 256, 1000 and 4096: all five are
+bit-identical.
+
+- 257 events delivered, 0 dropped, 0 undelivered.
+- Peak −3.49 dBFS, 0 clipped.
+- Output: `databreaks_engine_025_demo.wav`, 12.0 s, 48 kHz, 16-bit stereo, not committed.
+- MD5 `ac6d55d8eaa9e3807003406e74956166`, identical across runs and the default, Release and ASan builds.
+
+It is a software render, not an FM-1 recording, and nobody has listened to it
+yet.
+
+### 12.7 Benchmark (host only: 4-vCPU Xeon @ 2.1 GHz virtual machine, GCC 13.3, Release `-O3`)
+
+| Measurement | Result |
+|---|---|
+| `sampleOfTick` / `firstTickAtOrAfter` | 5.6 / 4.1 ns per call |
+| Sequencer alone, empty pattern | 0.04–0.07 µs per block (16–4096 frames) |
+| Sequencer alone, 27 pads on every 16th | 0.06–0.31 µs per block |
+| Sequencer alone, 27 pads + 48 notes per bar | 0.09–0.49 µs per block |
+| Maximum load: 1,024 events in one block | 20.3 µs per block (19.8 ns per event) |
+| Complete pipeline with that dense sequence, effects bypassed | 233–271 ns/frame (77–89× real time) |
+| Complete pipeline with that dense sequence, all 6 effects on | 483–529 ns/frame (39–43× real time) |
+
+All rows: 0 allocations.
+
+Memory: `Pattern` 127,024 bytes and `Sequencer` 169,168 bytes, so
+`AudioPipeline<16>` grows from 198,968 to 433,744 bytes (plus 268,800 bytes of
+tape heap buffers).
+
+These are host numbers. FM-1 CPU and RAM budgets are unverified, and the
+pattern storage in particular may need shrinking there.
+
+### 12.8 Limitations and what remains for Engine 026
+
+- One pattern per sequencer. There are no pattern banks, chaining, song mode, or pattern switching at loop boundaries.
+- No recording, overdubbing, quantisation, automation lanes or swing templates (microtiming is per step).
+- Editing patterns or the clock from another thread is not supported; only transport commands cross threads. A command queue for pattern edits is Engine 026 work.
+- Changing the pattern length while playing remaps the loop position at once (no boundary-aligned change).
+- Same-pitch overlapping notes on one target follow MIDI semantics: the first note-off releases all of them.
+- No locate/seek, count-in, metronome or external sync (MIDI clock).
+- Tempo changes are instantaneous at the next tick; no ramps.
+- `__int128` needs a 64-bit GCC/Clang host; a 32-bit target port needs another exact representation.
+- The audio engine runs at 48 kHz only; the clock supports other rates for when that changes.
+- Nothing has been listened to, and nothing has been run on an FM-1.
+
+## 13. Recommended next steps (in order)
+
+1. Review Engines 019–025 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–025 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
 4. ~~Engine 024: tape processor as an `AudioEffect` inserted into the chain.~~ Done (§11). Possible follow-ups:
@@ -1497,11 +1757,17 @@ chain, in real time.
    - per-pad / per-voice pan;
    - velocity curves;
    - reduce drum `trigger()` cost: the choke scan is O(27 × voices) (§7.8);
-   - a step sequencer that posts drum and synth events.
-6. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
-7. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
+   - ~~a step sequencer that posts drum and synth events~~ (Engine 025, §12).
+6. Engine 026 candidates (sequencer, §12.8):
+   - pattern banks and chaining with switching at loop boundaries;
+   - live recording, overdubbing and quantisation;
+   - a cross-thread command queue for pattern edits;
+   - automation lanes;
+   - locate/count-in/metronome.
+7. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
+8. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
 
-## 13. Change log on this branch
+## 14. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -1557,3 +1823,11 @@ chain, in real time.
   - updated `CLAUDE.md` and this report.
 
   The tape DSP, synth, drum, sampler, mixer and queue code were not changed. Engine 003 was not touched.
+- **Engine 025 commit:**
+  - added `core/sequencer/` (`musical_time.h`, `musical_clock.h`, `pattern.h`, `sequencer.h`), `core/audio/synth_event.h` (synth event types moved unchanged out of `audio_pipeline.h`), `tests/audio/engine_025.cpp`, `tests/audio/engine_025_render.cpp` and `tests/audio/engine_025_benchmark.cpp`;
+  - `core/audio/drum_engine.h`: audio-thread scheduled events merged with the queue in frame order;
+  - `core/audio/audio_pipeline.h`: scheduled synth events, and the sequencer (stopped by default) driven from `mixSources()`;
+  - `CMakeLists.txt`: three targets, `Threads::Threads` for `engine_025`, the warning loop, one `unit` and one `render` test entry;
+  - updated `CLAUDE.md` and this report.
+
+  No earlier test was changed. Synth, effect, tape, sampler and mixer DSP were not touched. Engine 003 was not touched.

@@ -1,7 +1,7 @@
 
 #pragma once
 
-// DATABREAKs Engine 021-024 - unified host-side audio pipeline (C++17).
+// DATABREAKs Engine 021-025 - unified host-side audio pipeline (C++17).
 //
 // One rendering path for all sound sources and the master output:
 //
@@ -54,6 +54,8 @@
 #include "drum_engine.h"
 #include "mixer.h"
 #include "spsc_ring.h"
+#include "synth_event.h"
+#include "../sequencer/sequencer.h"
 #include "effects/compressor.h"
 #include "effects/distortion.h"
 #include "effects/effect_chain.h"
@@ -64,31 +66,14 @@
 #include "../../instruments/synthesizers/synth_engine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 
 namespace databreaks {
 
-// Engine 022: which synth a queued note event addresses.
-enum class SynthTarget : std::uint8_t { Mono, Fm, Poly };
-
-enum class SynthEventType : std::uint8_t {
-    NoteOn,       // note + velocity (velocity 0 = note-off)
-    NoteOff,      // note
-    PitchBend,    // bendSemitones
-    AllNotesOff   // release every voice of the target
-};
-
-struct SynthEvent {
-    SynthEventType type = SynthEventType::NoteOn;
-    SynthTarget target = SynthTarget::Mono;
-    int note = 0;
-    int velocity = 0;
-    double bendSemitones = 0.0;
-    // Frame within the next render()/mixSources() call.
-    std::size_t frameOffset = 0;
-};
+// SynthTarget, SynthEventType and SynthEvent: see synth_event.h.
 
 template <std::size_t DrumVoices = 16,
           std::size_t DrumEvents = 256,
@@ -212,6 +197,55 @@ public:
         return SynthQueue::capacity();
     }
 
+    // ---- Scheduled synth events (Engine 025, AUDIO THREAD ONLY) --------------
+    //
+    // For schedulers running on the audio thread (the sequencer), which
+    // must not push into the single-producer queue above. Applied during the
+    // next render()/mixSources() call at their exact frameOffset (larger
+    // offsets clamp to the last frame, counted), merged with queued synth
+    // events in frame order; at the same frame, scheduled events come first,
+    // in scheduling order. At most ScheduledSynthCapacity per block; beyond
+    // that the call returns false and droppedScheduledSynthCount() grows.
+
+    static constexpr std::size_t ScheduledSynthCapacity = 1024;
+
+    bool scheduleNoteOn(SynthTarget target, int note, int velocity,
+                        std::size_t frameOffset) {
+        if (note < 0 || note > 127) {
+            return false;
+        }
+        return scheduleSynth({SynthEventType::NoteOn, target, note, velocity,
+                              0.0, frameOffset});
+    }
+
+    bool scheduleNoteOff(SynthTarget target, int note, std::size_t frameOffset) {
+        if (note < 0 || note > 127) {
+            return false;
+        }
+        return scheduleSynth({SynthEventType::NoteOff, target, note, 0, 0.0,
+                              frameOffset});
+    }
+
+    bool scheduleAllNotesOff(SynthTarget target, std::size_t frameOffset) {
+        return scheduleSynth({SynthEventType::AllNotesOff, target, 0, 0, 0.0,
+                              frameOffset});
+    }
+
+    std::uint64_t processedScheduledSynthCount() const { return processedScheduledSynth_; }
+    std::uint64_t droppedScheduledSynthCount() const { return droppedScheduledSynth_; }
+    std::uint64_t clampedScheduledSynthCount() const { return clampedScheduledSynth_; }
+
+    // ---- Sequencer (Engine 025) ----------------------------------------------
+    //
+    // Driven by mixSources(): each block it delivers its events through the
+    // scheduled paths above at exact frames. Stopped by default, so the
+    // pipeline behaves exactly as before until it is started.
+    Sequencer& sequencer() { return sequencer_; }
+    const Sequencer& sequencer() const { return sequencer_; }
+
+    // Sequencer events the instruments could not take (scheduled lists full).
+    std::uint64_t undeliveredSequencerEventCount() const { return undelivered_; }
+
     // Audio thread.
     std::uint64_t processedSynthEventCount() const {
         return processedSynthEvents_;
@@ -254,6 +288,9 @@ public:
         if (output == nullptr || frameCount == 0) {
             return;
         }
+        sequencer_.process(frameCount, [this](const SequencerEvent& e) {
+            deliver(e);
+        });
         drums_.processBlock(output, frameCount);
         mixSynths(output, frameCount);
     }
@@ -305,6 +342,47 @@ private:
     Poly poly_;
     SynthQueue synthQueue_;
     std::uint64_t processedSynthEvents_ = 0;
+    std::array<SynthEvent, ScheduledSynthCapacity> scheduledSynth_{};
+    std::size_t scheduledSynthCount_ = 0;
+    std::uint64_t processedScheduledSynth_ = 0;
+    std::uint64_t droppedScheduledSynth_ = 0;
+    std::uint64_t clampedScheduledSynth_ = 0;
+    Sequencer sequencer_{SAMPLE_RATE};
+    std::uint64_t undelivered_ = 0;
+
+    bool scheduleSynth(const SynthEvent& event) {
+        if (scheduledSynthCount_ == ScheduledSynthCapacity) {
+            ++droppedScheduledSynth_;
+            return false;
+        }
+        std::size_t i = scheduledSynthCount_;
+        while (i > 0 && scheduledSynth_[i - 1].frameOffset > event.frameOffset) {
+            scheduledSynth_[i] = scheduledSynth_[i - 1];
+            --i;
+        }
+        scheduledSynth_[i] = event;
+        ++scheduledSynthCount_;
+        return true;
+    }
+
+    void deliver(const SequencerEvent& e) {
+        bool ok = false;
+        switch (e.kind) {
+        case SequencerEvent::Kind::Drum:
+            ok = drums_.scheduleTrigger(static_cast<std::size_t>(e.value),
+                                        e.velocity, e.offset);
+            break;
+        case SequencerEvent::Kind::NoteOn:
+            ok = scheduleNoteOn(e.target, e.value, e.velocity, e.offset);
+            break;
+        case SequencerEvent::Kind::NoteOff:
+            ok = scheduleNoteOff(e.target, e.value, e.offset);
+            break;
+        }
+        if (!ok) {
+            ++undelivered_;
+        }
+    }
     StereoMixer master_;
     Equalizer eq_;
     Compressor compressor_;
@@ -324,21 +402,57 @@ private:
 
     // Applies queued synth events at their frames (FIFO, at most
     // synthEventCapacity() per call), rendering the synths in between.
+    // Queued events keep their Engine 022 rule (FIFO, at
+    // min(max(offset, previous queued event's frame), n - 1)); scheduled
+    // events (Engine 025) are merged in frame order and win ties.
     void mixSynths(StereoFrame* output, std::size_t frameCount) {
         std::size_t position = 0;
-        SynthEvent event;
-        for (std::size_t applied = 0;
-             applied < SynthQueue::capacity() && synthQueue_.pop(event);
-             ++applied) {
-            const std::size_t at = std::min(
-                std::max(event.frameOffset, position), frameCount - 1);
+        std::size_t queuePosition = 0;
+        std::size_t next = 0;
+        std::size_t popped = 0;
+        SynthEvent held;
+        bool hasHeld = false;
+        std::size_t heldAt = 0;
+
+        for (;;) {
+            if (!hasHeld && popped < SynthQueue::capacity() &&
+                synthQueue_.pop(held)) {
+                ++popped;
+                hasHeld = true;
+                heldAt = std::min(std::max(held.frameOffset, queuePosition),
+                                  frameCount - 1);
+                queuePosition = heldAt;
+            }
+            const bool hasScheduled = next < scheduledSynthCount_;
+            if (!hasScheduled && !hasHeld) {
+                break;
+            }
+            std::size_t scheduledAt = 0;
+            if (hasScheduled) {
+                scheduledAt = scheduledSynth_[next].frameOffset;
+                if (scheduledAt > frameCount - 1) {
+                    scheduledAt = frameCount - 1;
+                    ++clampedScheduledSynth_;
+                }
+            }
+            const bool takeScheduled =
+                hasScheduled && (!hasHeld || scheduledAt <= heldAt);
+            const std::size_t at = takeScheduled ? scheduledAt : heldAt;
             if (at > position) {
                 renderSynths(output + position, at - position);
                 position = at;
             }
-            applySynthEvent(event);
-            ++processedSynthEvents_;
+            if (takeScheduled) {
+                applySynthEvent(scheduledSynth_[next]);
+                ++next;
+                ++processedScheduledSynth_;
+            } else {
+                applySynthEvent(held);
+                hasHeld = false;
+                ++processedSynthEvents_;
+            }
         }
+        scheduledSynthCount_ = 0;
         renderSynths(output + position, frameCount - position);
     }
 
