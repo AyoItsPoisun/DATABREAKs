@@ -1,8 +1,8 @@
 
 #pragma once
 
-// DATABREAKs Engine 025/026 - pattern sequencer and performance recorder
-// (host-side C++17).
+// DATABREAKs Engine 025/026/027 - pattern sequencer, performance recorder
+// and non-destructive quantization (host-side C++17).
 //
 // Plays one Pattern (Engine 025) and one RecordedTrack (Engine 026)
 // against a MusicalClock and turns them into events at exact sample offsets
@@ -27,9 +27,12 @@
 //             L x lengthTicks + k x stepTicks + microTicks;
 //           note i of loop L starts at L x lengthTicks + startTick and ends
 //             lengthTicks later;
-//      c. recorded events (visible ones) fire at loop x lengthFine +
-//         startFine, except in the very loop and timeline epoch in which
-//         they were captured (the live input already sounded there);
+//      c. recorded events (visible ones) fire at occurrence k at
+//         k x lengthFine + q, where q is the played start: the raw startFine,
+//         or its quantized position (Engine 027, quantize.h; q in
+//         [0, lengthFine], q == lengthFine is the next loop's start). The
+//         occurrence k == the capture loop (same timeline epoch) is skipped:
+//         the live input already sounded there;
 //      d. live inputs sound at their own samples;
 //   4. events are sorted by (sample offset, kind, target, pad/note, order):
 //      at the same sample note-offs come first (so a note can be re-struck),
@@ -51,7 +54,7 @@
 //     recorder state. Only process() and the direct calls below touch them.
 //   * Another thread never mutates them: it sends commands. postTransport()
 //     (start/stop/reset/tempo), postCommand() (arm, disarm, modes, punch,
-//     undo, redo, clear, pattern edits) and postLive() (live input) each
+//     undo, redo, clear, quantize settings, pattern edits) and postLive() (live input) each
 //     use their own SPSC queue: ONE producer thread per queue (the same
 //     thread may feed all three). They are applied at the start of the next
 //     block. A full queue rejects the item and counts it.
@@ -180,6 +183,40 @@ public:
         recorder_.openPass_ = 0;
     }
 
+    // ---- Quantization (Engine 027; audio thread, or via postCommand) ---------
+
+    // Non-destructive: only playback changes; the recorded track is never
+    // modified. Invalid settings are rejected (false) and change nothing.
+    bool setQuantize(const QuantizeSettings& settings) {
+        if (!settings.valid()) return false;
+        if (settings != quantize_) {
+            quantize_ = settings;
+            quantCacheValid_ = false;
+        }
+        return true;
+    }
+    const QuantizeSettings& quantizeSettings() const { return quantize_; }
+
+    // Played start (loop-relative, in [0, loop length]) and length of
+    // recorded event i under the current settings and pattern length.
+    std::int64_t playedStartFine(std::size_t i) {
+        const RecordedEvent& e = recorder_.track_.at(i);
+        if (!quantize_.active()) return e.startFine;
+        refreshQuantCache(pattern_.lengthTicks() * Fine);
+        return e.startFine + quantStart_[i];
+    }
+    std::int64_t playedLengthFine(std::size_t i) {
+        const RecordedEvent& e = recorder_.track_.at(i);
+        if (!quantize_.active()) return e.lengthFine;
+        refreshQuantCache(pattern_.lengthTicks() * Fine);
+        return e.lengthFine + quantLength_[i];
+    }
+
+    // Times the derived cache was recomputed (diagnostics / benchmark).
+    std::uint64_t quantizeRefreshCount() const { return quantRefreshes_; }
+    // Invalid commands rejected by the command queue (SetQuantize, SetPunch).
+    std::uint64_t invalidCommandCount() const { return invalidCommands_; }
+
     // Live input on the audio thread (same rules as postLive).
     bool liveEvent(const LiveEvent& event) { return recorder_.queueLive(event); }
 
@@ -293,6 +330,39 @@ private:
     std::uint64_t delivered_ = 0;
     std::uint64_t dropped_ = 0;
     std::uint64_t skipped_ = 0;
+    std::uint64_t invalidCommands_ = 0;
+
+    // Quantization (Engine 027). The cache holds, per recorded event, the
+    // difference between played and raw start/length. It is DERIVED data
+    // (the raw events are never touched), recomputed from the raw events
+    // whenever the settings, the track revision or the loop length change.
+    // |delta| < 1.5 grid steps <= 5,898,240 fine ticks, so int32 is enough.
+    QuantizeSettings quantize_{};
+    std::array<std::int32_t, RecordedTrack::MaxEvents> quantStart_{};
+    std::array<std::int32_t, RecordedTrack::MaxEvents> quantLength_{};
+    bool quantCacheValid_ = false;
+    std::uint64_t quantRevision_ = 0;
+    std::int64_t quantLoopFine_ = 0;
+    std::uint64_t quantRefreshes_ = 0;
+
+    void refreshQuantCache(std::int64_t loopFine) {
+        const RecordedTrack& t = recorder_.track_;
+        if (quantCacheValid_ && quantRevision_ == t.revision() && quantLoopFine_ == loopFine) {
+            return;
+        }
+        for (std::size_t i = 0; i < t.size(); ++i) {
+            const RecordedEvent& e = t.at(i);
+            std::int64_t start = 0;
+            std::int64_t length = 0;
+            quantize::apply(e, loopFine, quantize_, start, length);
+            quantStart_[i] = static_cast<std::int32_t>(start - e.startFine);
+            quantLength_[i] = static_cast<std::int32_t>(length - e.lengthFine);
+        }
+        quantCacheValid_ = true;
+        quantRevision_ = t.revision();
+        quantLoopFine_ = loopFine;
+        ++quantRefreshes_;
+    }
 
     static std::uint64_t mix(std::uint64_t x) {  // splitmix64 finaliser
         x ^= x >> 30;
@@ -355,7 +425,12 @@ private:
             case SequencerCommandType::SetRecordMode: recorder_.setRecordMode(c.recordMode); break;
             case SequencerCommandType::SetWriteMode: recorder_.setWriteMode(c.writeMode); break;
             case SequencerCommandType::SetTargets: recorder_.setTargets(c.targets); break;
-            case SequencerCommandType::SetPunch: recorder_.setPunch(c.a, c.b); break;
+            case SequencerCommandType::SetPunch:
+                if (!recorder_.setPunch(c.a, c.b)) ++invalidCommands_;
+                break;
+            case SequencerCommandType::SetQuantize:
+                if (!setQuantize(c.quantize)) ++invalidCommands_;
+                break;
             case SequencerCommandType::ClearPunch: recorder_.clearPunch(); break;
             case SequencerCommandType::Undo: undo(); break;
             case SequencerCommandType::Redo: redo(); break;
@@ -661,8 +736,13 @@ private:
 
         // c. Recorded events.
         const RecordedTrack& track = recorder_.track_;
+        const bool quant = quantize_.active();
+        if (quant) refreshQuantCache(loopFine);
         if (f1 > f0 && track.size() > 0) {
-            const std::int64_t rLoopFirst = floorDiv(f0, loopFine);
+            // A quantized start can reach loopFine (next loop's position 0),
+            // so with quantization the previous loop's occurrences are
+            // examined too.
+            const std::int64_t rLoopFirst = floorDiv(f0, loopFine) - (quant ? 1 : 0);
             const std::int64_t rLoopLast = floorDiv(f1 - 1, loopFine);
             for (std::int64_t loop = rLoopFirst; loop <= rLoopLast; ++loop) {
                 for (std::size_t i = 0; i < track.size(); ++i) {
@@ -670,7 +750,8 @@ private:
                     const RecordedEvent& e = track.at(i);
                     if (e.startFine >= loopFine) continue;
                     if (loop == e.captureLoop && e.captureEpoch == epoch_) continue;
-                    const std::int64_t fine = loop * loopFine + e.startFine;
+                    const std::int64_t fine =
+                        loop * loopFine + e.startFine + (quant ? quantStart_[i] : 0);
                     if (fine < f0 || fine >= f1) continue;
                     const std::uint64_t order = RecordedOrder + e.sequence;
                     if (e.kind == RecordedEvent::Kind::Drum) {
@@ -686,7 +767,9 @@ private:
                                e.target, e.value, e.velocity, order}, false)) {
                         continue;
                     }
-                    active_[activeCount_++] = {e.target, e.value, fine + e.lengthFine};
+                    active_[activeCount_++] = {
+                        e.target, e.value,
+                        fine + e.lengthFine + (quant ? quantLength_[i] : 0)};
                 }
             }
         }

@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-19 for Engine 026 on branch `claude/engine-019-prep-transfer`.
-Engine 026 starts from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-19 for Engine 027 on branch `claude/engine-019-prep-transfer`.
+Engine 027 starts from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -18,11 +18,12 @@ History of this report:
 - **`7a1ced6`:** updated for Engine 023 (effects engine).
 - **`3bdd248`:** updated for Engine 024 (tape in the effects chain).
 - **`f94fcef`:** updated for Engine 025 (sequencer foundation).
-- **Engine 026 commit:** updated for Engine 026 (recording and performance capture).
+- **`7712644`:** updated for Engine 026 (recording and performance capture).
+- **Engine 027 commit:** updated for Engine 027 (non-destructive quantization).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 026**:
+The repository contains host-side C++17 prototypes through **Engine 027**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -37,7 +38,8 @@ The repository contains host-side C++17 prototypes through **Engine 026**:
 - an effects engine (023): EQ, compressor, soft clipper, distortion and reverb in an ordered chain on the combined bus, between the sources and the master;
 - tape in the effects chain (024): the existing `TapeMachine` runs as a chain effect (`TapeEffect`) between the soft clipper and distortion, with all twelve tape controls;
 - a sequencer foundation (025): an exact musical clock, 27-pad drum and synth-note patterns, and sample-accurate scheduling into the existing instruments, identical for any block size;
-- **performance recording** (026): free and loop recording of drum hits and synth notes (musical events, not audio) with overdub, replace, punch in/out and 16-step undo/redo. Raw timing is kept at 1/1024-tick resolution and replays on the captured sample. Cross-thread control uses lock-free command and live-input queues.
+- performance recording (026): free and loop recording of drum hits and synth notes (musical events, not audio) with overdub, replace, punch in/out and 16-step undo/redo. Raw timing is kept at 1/1024-tick resolution and replays on the captured sample. Cross-thread control uses lock-free command and live-input queues;
+- **non-destructive quantization** (027): grid (whole to 1/64), strength 0–100 %, swing, per-kind and per-pad selection and optional note-off quantization, applied at playback from the untouched raw recording.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -50,15 +52,35 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–026 have been run only on a
+pad scanning, storage or boot code. Engines 019–027 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 026 commit
+### 2.1 Engine 027 commit
 
-Same environment as §2.7.
+Same environment as §2.8.
+
+| Check | Result |
+|---|---|
+| Default build | 43 executables (37 registered tests + the Engine 020, 023–027 benchmarks), **0 warnings** |
+| `ctest --test-dir build --output-on-failure` | **37/37 pass** (the 35 existing tests plus `engine_027` and `render_engine_027_render`) |
+| `-L unit` / `-L render` | **20/20** / **17/17 pass** |
+| `engine_027` | **30/30 checks**. `engine_026` 55, `engine_025` 38 and all earlier tests: passing and unchanged |
+| Release `-O3 -DNDEBUG` | **0 warnings** (after the harness fix in §14.7), **37/37 pass** |
+| ASan + UBSan (Debug) | **37/37 pass**, no reports |
+| ThreadSanitizer | Engines 020–027, no reports |
+| Allocation | `engine_027` V3, `engine_026` R2 and every benchmark row: 0 allocations |
+| Existing renders | The 16 reference WAVs are byte-identical to `e54db9b`'s; the Engine 021 demo matches the committed WAV; the Engine 022–026 demos match their own renders |
+| New demo | `databreaks_engine_027_demo.wav`: valid, bit-identical for blocks 1/64/256/1000/4096 and across three build types (§14.8) |
+| Mutation spot checks | 10 deliberate defects, all caught (§14.7) |
+| `git diff --check` | Clean |
+| Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
+
+### 2.2 Engine 026 commit (`7712644`)
+
+Same environment as §2.8.
 
 | Check | Result |
 |---|---|
@@ -76,9 +98,9 @@ Same environment as §2.7.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.2 Engine 025 commit (`f94fcef`)
+### 2.3 Engine 025 commit (`f94fcef`)
 
-Same environment as §2.7.
+Same environment as §2.8.
 
 | Check | Result |
 |---|---|
@@ -95,9 +117,9 @@ Same environment as §2.7.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.3 Engine 024 commit (`3bdd248`)
+### 2.4 Engine 024 commit (`3bdd248`)
 
-Same environment as §2.7.
+Same environment as §2.8.
 
 | Check | Result |
 |---|---|
@@ -115,9 +137,9 @@ Same environment as §2.7.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.4 Engine 023 commit (`7a1ced6`)
+### 2.5 Engine 023 commit (`7a1ced6`)
 
-Same environment as §2.7.
+Same environment as §2.8.
 
 | Check | Result |
 |---|---|
@@ -135,9 +157,9 @@ Same environment as §2.7.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.5 Engine 022 commit (`d326959`)
+### 2.6 Engine 022 commit (`d326959`)
 
-Same environment as §2.7.
+Same environment as §2.8.
 
 | Check | Result |
 |---|---|
@@ -154,7 +176,7 @@ Same environment as §2.7.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.6 Engine 021 commit (`100a8e1`)
+### 2.7 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -173,7 +195,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.7 Engine 020 commit (`dfd3164`)
+### 2.8 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -193,7 +215,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.8 Engine 019 commit (`ce44e70`, for reference)
+### 2.9 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -214,10 +236,10 @@ WAVs byte-identical to `e54db9b`.
 | `DrumEngine<N, E>` | 019, 020 | Working prototype, tested | See §6 and §7 |
 | `DrumEventQueue<N>` | 020 | Working prototype, tested | Lock-free single-producer/single-consumer ring; see §7.4 |
 | `AudioPipeline<V, E, S>` | 021–025 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths → effects chain → master, driven by the sequencer; see §8–§12 |
-| Sequencer (`core/sequencer/`) | 025, 026 | Working prototype, tested | Musical clock, patterns, sample-accurate scheduling (§12); performance recording, command and live-input queues (§13) |
+| Sequencer (`core/sequencer/`) | 025–027 | Working prototype, tested | Musical clock, patterns, sample-accurate scheduling (§12); performance recording, command and live-input queues (§13); non-destructive quantization (§14) |
 | Effects (`core/audio/effects/`) | 023, 024 | Working prototype, tested | EQ, compressor, soft clipper, tape (`TapeEffect`, 024), distortion, reverb, `EffectChain`; see §10 and §11 |
 | `SpscRing<T, N>` | 020, 022 | Working prototype, tested | Generalised drum queue; carries drum and synth events |
-| MIDI byte input, quantisation, pattern banks, effect automation, tape transport as a source | — | Not started | Live input enters through `Sequencer::postLive` (Engine 026); new sources go into `AudioPipeline::mixSources` |
+| MIDI byte input, committing recordings to pattern steps, pattern banks, effect automation, tape transport as a source | — | Not started | Live input enters through `Sequencer::postLive` (Engine 026); new sources go into `AudioPipeline::mixSources` |
 | Firmware (HAL, drivers, display, pads, storage, boot) | — | Not started | Depends on hardware facts that are not yet documented |
 
 ## 4. DSP findings (synth/envelope code, carried over unchanged)
@@ -1988,9 +2010,226 @@ numbers; FM-1 CPU and RAM budgets are unverified.
 - Memory: +242 KB per sequencer. This may be too much for the FM-1, whose RAM is undocumented.
 - Nothing has been listened to, and nothing has been run on an FM-1.
 
-## 14. Recommended next steps (in order)
+## 14. Engine 027: non-destructive quantization
 
-1. Review Engines 019–026 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–026 demo renders.
+Files:
+
+- new:
+  - `core/sequencer/quantize.h`: `QuantizeGrid`, `QuantizeSettings` and the integer quantizer (`quantize::destination`, `position`, `apply`);
+  - tests: `tests/audio/engine_027.cpp` (`unit`), `tests/audio/engine_027_render.cpp` (`render`), `tests/audio/engine_027_benchmark.cpp` (built, not a test);
+- changed:
+  - `core/sequencer/sequencer.h`: quantized playback of the recorded track, `setQuantize`, `playedStartFine/playedLengthFine`, the derived cache, `SetQuantize` and invalid-command counting;
+  - `core/sequencer/recorder.h`: `SequencerCommandType::SetQuantize` and a `QuantizeSettings` command field;
+  - `core/sequencer/recorded_track.h`: a revision counter (`revision()`), incremented on every mutation;
+  - `CMakeLists.txt`.
+
+No redesign was needed. The Engine 025 clock and scheduler and the Engine 026
+recorder, event model, undo/redo and queues are unchanged. Quantization is
+off by default (strength 0). In that state no quantization code runs and the
+output is the Engine 026 output: all reference renders, including the
+Engine 026 demo, are byte-identical.
+
+### 14.1 Model: a playback transform, not an edit
+
+- The stored `RecordedEvent`s are **never modified**. Quantization only changes where an event is *played*.
+- Every played position is computed from the raw recorded position (`startFine`, `lengthFine`) and the current `QuantizeSettings`. Nothing is computed from a previous result, so changes never compound.
+- Strength 0 reproduces the original timing exactly.
+- Recording while quantization is on stores raw timing. Live input always sounds unquantized.
+
+`QuantizeSettings` (24 bytes):
+
+| Field | Range | Default |
+|---|---|---|
+| `grid` | whole, half, quarter, eighth, sixteenth, thirty-second, sixty-fourth | sixteenth |
+| `strength` | 0–100 % (0 = off) | 0 |
+| `swing` | 0–100 % (0 = straight) | 0 |
+| `targets` | `RecordTargets` bits: drums, mono, FM, poly (all = `RecordAll`) | all |
+| `drumLanes` | 27-bit pad mask | all 27 |
+| `quantizeNoteOff` | quantize note ends too | off |
+
+Invalid settings are rejected (`setQuantize` returns false, or the command
+is counted in `invalidCommandCount`) and change nothing. Velocity and every
+other field are never changed.
+
+### 14.2 Grid, strength and swing conventions
+
+All arithmetic is integer in fine ticks (1/1024 tick). There is no floating
+point and nothing accumulates between evaluations.
+
+- **Grid step G:** whole 3,840 ticks, half 1,920, quarter 960, eighth 480, sixteenth 240, thirty-second 120, sixty-fourth 60. All are exact at 960 PPQ.
+- **Anchor:** grid points are anchored to the **loop start**, because recorded positions are loop-relative. Point k is at k·G for every k·G < L, where L is the loop length. The loop end L is also a point (position 0 of the next loop). If L is not a multiple of G (e.g. 7/8 with a quarter grid), the last cell is shorter.
+- **Destination:** the nearest grid point. On an exact tie it moves to the later point, rounding half up like `RecordedEvent::nearestStep`.
+- **Strength P:** q = p + trunc((dest − p)·P/100). It never overshoots the grid point; P = 0 gives p exactly and P = 100 gives the grid point exactly. The error versus the exact rational value is under one fine tick (1/983,040 quarter note).
+- **Swing S:**
+  - Odd grid points (k = 1, 3, 5…, counted from the loop start) are delayed by floor(S·G·1024/200) fine ticks. Even points never move.
+  - S = 0 is straight. S = 50 delays the off-beat by a quarter step (62.5 : 37.5); S = 67 ≈ triplet; S = 100 delays it by half a step (75 : 25).
+  - Swing applies to the selected grid's alternate points (sixteenth grid → off-beat sixteenths).
+  - A swung point that would land at or after the loop end does not exist, and the loop end is never swung.
+  - Parity restarts at every loop start, so every loop swings identically. With an odd number of grid steps per loop (e.g. 7/8 in eighths), the loop end acts as an even point.
+- **Loop wrap:** q is in [0, L]. A quantized position of L (an event played just before the loop end) plays at the start of the next loop. The capture-loop skip (Engine 026) applies to the **occurrence index**, so an event quantized across the loop end is never doubled next to its live original. After a `reset()` it sounds on the very first downbeat (P4b).
+
+### 14.3 Note lengths
+
+- **Default:** the recorded length is kept, so the note-off moves with the note-on.
+- **`quantizeNoteOff`:** the absolute note end p + length is quantized on the same grid, in its own loop, with the same strength. Length = quantized end − quantized start.
+  - If that is less than 1 fine tick (both ends land on the same point), the recorded length is kept. There are never zero or negative lengths.
+  - Lengths are capped at `Pattern::MaxNoteLengthTicks`.
+- **Note-off matching:** unchanged. Each played note-on records its own target, note and note-off position in the active list, so every note-on gets exactly one note-off, also when notes are quantized onto the same start (N5). `stop()`/`reset()` still release everything.
+
+### 14.4 Performance design: a derived cache
+
+Computing the transform for every event in every block would cost about
+7 ns × 2,048 events per block. Instead the sequencer keeps a **derived
+cache**: two `int32_t` deltas per event slot (played − raw start, played −
+raw length).
+
+- It costs 16,384 bytes.
+- It is recomputed on the audio thread, inside `process()`, only when the settings, the track revision or the loop length change: 16.8 µs mean / 31 µs worst for 2,048 events on this host.
+- Bounds: |start delta| ≤ 0.75 grid step and |length delta| ≤ 1.5 grid steps (≤ 5,898,240 fine ticks), so `int32_t` holds every value.
+- Raw per-event storage is unchanged (88 bytes). The cache is never the source of truth: it is rebuilt from raw data.
+
+### 14.5 Threading and settings changes during playback
+
+- The quantize settings and the cache belong to the audio thread, like the pattern and the track.
+- Another thread sends `SequencerCommandType::SetQuantize` (with a complete `QuantizeSettings`) through the existing command queue (63 entries, one producer thread). The settings change atomically at the start of the next block; a full queue rejects and counts.
+- `setQuantize()`, `quantizeSettings()`, `playedStartFine()` and `playedLengthFine()` are audio-thread calls (or while audio is stopped).
+- No mutex, no allocation.
+- **Changing settings while playing:** the new settings apply from the first sample of the next block. Events whose played position has not yet passed are played at their new position. As with editing pattern steps live, an event moved across the play head in that loop can be skipped once (moved behind it) or heard twice (moved ahead of it after already sounding). Sounding notes keep the note-off they were scheduled with, so nothing sticks. For a click-free change, a host changes settings at a loop start; the demo does this exactly by splitting the render call there.
+- **Ordering:** unchanged Engine 025/026 rule at one sample (note-off → drums by pad → note-ons by target and note), then pattern before recorded, recorded by capture order. Events quantized onto the same sample therefore play in a fixed order (N6).
+- **Undo/redo:** recording passes keep Engine 026's history unchanged; quantization follows the visible events (R3). Quantize settings are **not** undo steps; returning to strength 0 (or any earlier settings) restores that playback exactly, because nothing is destroyed.
+
+### 14.6 Memory compared with Engine 026
+
+| Item | Engine 026 | Engine 027 | Change |
+|---|---|---|---|
+| `RecordedEvent` (per event, raw) | 88 B | 88 B | **none** |
+| `RecordedTrack` | 182,576 B | 182,584 B | +8 B (revision counter) |
+| `SequencerCommand` | 96 B | 120 B | +24 B (`QuantizeSettings`) |
+| `Sequencer` | 411,328 B | 429,328 B | **+18,000 B (+4.4 %)**: 16,384 cache + 1,536 command ring + settings and counters |
+| `AudioPipeline<16>` | 675,904 B | 693,904 B | +18,000 B (+2.7 %) |
+
+So per-event *raw* storage does not grow. The derived cache adds 8 bytes per
+event slot (fixed, for all 2,048 slots). No recording is duplicated.
+
+### 14.7 Tests: `tests/audio/engine_027.cpp`, 30 checks, all passing
+
+| Area | Checks |
+|---|---|
+| Quantizer math | Q1 grid table; Q2 destination vs an independent brute-force reference (every point enumerated) for 7 grids × swing 0/25/50/67/100 × 5 loop shapes (4/4, 3/4, 7/8, 2 bars of 5/4, 1/32), positions before/on/after every point and every midpoint: 119,216 cases; Q3 strength 0/1/25/50/75/99/100 (exact rational bound, never overshoots); Q4 swing placement exactly (quarter and half step, straight at 0); Q5 swung point at the loop end dropped |
+| Playback | P1 loose 16-hit performance at the exact quantized samples for 7 grids × strength 0/25/50/75/100 over two loops; P2 swing 0/20/50/67/100 over three loops, swing 50 = exactly +1,500 samples; P3/P4 hits 1 sample before / on / after the loop end (wrap to the next downbeat, no double); P4b first downbeat after reset; P5 1,000 loops at 123.456 BPM land on the exact tick samples (no drift) |
+| Selection and notes | N1 drums / mono / FM / poly / all; N2 each of the 27 lanes alone, velocities kept; N3 durations preserved; N4 optional note-off quantization (grid ends, 50 % on both ends, too-short notes keep their length, loop-crossing note, the played note-off sample, no stuck notes); N5 notes quantized onto one start keep their own note-offs; N6 tie order |
+| Non-destructive | D1 200 random grid/strength/swing changes each match the reference from raw timing; D2 track untouched field by field; D3 strength 0 restores the original timestamps and playback exactly; D4 identical settings give identical output, A → B → A returns to A |
+| Engine 026 regression | R1 recording with quantization on stores raw timing, live input unquantized; R2 quantized replay from the next loop; R3 undo/redo of passes with quantization on |
+| Block size | K1, K2: identical events for blocks 1, 16, 32, 64, 128, 256, 512, 1024 and 4096 at 120 and 123.456 BPM, with settings changes during playback and recording while quantized |
+| Control / RT | V1 invalid strength/swing/grid/targets/lanes rejected; V2 `SetQuantize` via the queue (invalid counted, 63 accepted, overflow counted, last applies); V3 0 allocations (quantized playback, recording, changes, undo/redo); V4 strength 0 with any grid/swing = Engine 026 output and no computation |
+
+Engine 026's 55 checks, Engine 025's 38 and all earlier tests pass unchanged.
+
+**Mutation checks** (each made temporarily in a scratch copy, Release build):
+
+| Mutation | Caught by |
+|---|---|
+| destructive quantization (cache writes the quantized start into the track) | P1, P3, N1, N2, D1–D4, R1 |
+| no previous-loop occurrence (wrap across the loop end lost) | P4b |
+| swing on even instead of odd points | Q2–Q5, P2, D1 |
+| cumulative drift (quantizing the previous result instead of the raw time) | P3, N2, D1, D4 |
+| strength rounding order (`/100` before `×P`) | Q3, P1–P5, N1, N4–N6, D1, R3 |
+| tie to the earlier point | Q2, D1 |
+| cache not refreshed on track changes | P3, P4, R3 |
+| quantized note-off length not played | N4 |
+| lane mask ignored | N2 |
+| zero-length guard (`< 0` instead of `< 1`) | N4 |
+
+`wrap` and `noteoff` survived the first version of the tests; P4b and the
+played-note-off part of N4 were added for them. The `wrap` case only shows
+when a block starts exactly on a loop boundary's first fine tick, as at
+sample 0 after a reset.
+
+**Compiler warning found and fixed.** In Release, GCC 13 reported
+`-Wmismatched-new-delete` for the test's counting `operator new`/`delete`
+replacements once they were inlined (a false positive: both sides use
+malloc/free). The replacements in the Engine 027 test and benchmark are now
+`noinline`. Test harness only.
+
+### 14.8 Render demonstration: `render_engine_027_render`
+
+A deliberately loose drum performance is recorded once, then replayed with
+different settings. The timing errors are up to ±30 ms; a 16th is 125 ms.
+It is a 2-bar loop at 120 BPM with kick, snare, and closed/open hats in a
+choke group, and an empty pattern.
+
+| Loop | Settings |
+|---|---|
+| 0 | live, loose (being recorded) |
+| 1 | replay, original timing |
+| 2 | 16th grid, 50 % |
+| 3 | 16th grid, 100 % |
+| 4 | 16th grid, 100 %, swing 50 |
+| 5 | strength 0: the original again |
+
+- Settings change exactly at loop starts.
+- Blocks 1, 64, 256, 1000 and 4096 are bit-identical.
+- 45 hits. Largest move: 677 samples at 50 %, 1,354 at 100 %.
+- The recording is untouched. Loop 5 played positions equal loop 1's, and loop 5's audio equals loop 1's after the previous loop's tails (difference 0).
+- 270 events delivered, 0 dropped, 0 undelivered. Peak 0.509 (−5.9 dBFS), 0 clipped.
+- Output: `databreaks_engine_027_demo.wav`, 24.0 s, 48 kHz, 16-bit stereo, **not committed**.
+- MD5 `acaa8e5368beda64f90a1c413690e1e8`, identical in the default, Release and ASan builds.
+
+It is a software render, not an FM-1 recording, and nobody has listened to it.
+
+### 14.9 Benchmark (host only: 4-vCPU Xeon @ 2.1 GHz virtual machine, GCC 13.3, Release `-O3`)
+
+Mean wall-clock time per `Sequencer::process()` call with a full 2,048-event
+track. Worst-case single blocks on this shared VM are dominated by scheduling
+noise (up to ~200 µs even on the unchanged path) and are omitted.
+
+| Audio thread | Block 64 | Block 256 |
+|---|---|---|
+| Quantize off (Engine 026 path) | 2.46 µs | 2.54 µs |
+| 16th, 100 % | 4.92 µs | 5.22 µs |
+| 16th, 60 %, swing 50, note-offs | 4.91 µs | 4.99 µs |
+| Whole note, 100 % (all events collapse onto one sample: 1,024 of 2,048 dropped per loop by the per-block limit, as designed) | 4.91 µs | 5.08 µs |
+| Settings change every block (worst case: refresh every block) | 20.5 µs | 20.7 µs |
+| Capture into 1,536 events with quantize on (refresh in blocks with input) | 6.08 µs | 10.6 µs |
+
+| Other | Cost |
+|---|---|
+| `quantize::position` | 6.6 ns per call |
+| Cache refresh, 2,048 events | 16.8 µs mean, 31 µs worst |
+| `postCommand(SetQuantize)` | ~7 ns per call |
+
+**Against Engine 026** (its benchmark built from `7712644` and run on the new
+code, alternating, two runs each, block 256 means):
+
+| Scenario | Engine 026 | Engine 027 |
+|---|---|---|
+| Playback, 2,048 events | 2.28–2.42 µs | 2.65–2.75 µs |
+| Capture | 2.55–2.66 µs | 2.67–3.51 µs |
+| Overdub | 3.44–3.73 µs | 3.76–3.94 µs |
+| Dense | 3.75–3.92 µs | 4.05–4.13 µs |
+
+With quantization off, means are about 5–15 % higher, comparable to the
+run-to-run spread. With quantization on, playback costs about twice the
+Engine 026 path: one extra loop is examined for wrapped events, plus the
+cache reads. All rows: 0 allocations. These are host numbers; FM-1 CPU and
+RAM budgets are unverified.
+
+### 14.10 Limitations and remaining work
+
+- Quantization is global per sequencer: one settings set, applied to the selected kinds/lanes of the whole recorded track. There are no per-event or per-region selections, and settings are not part of the undo history.
+- Grid anchored to the loop start; no grid offset, no triplet/dotted grids (swing 67 approximates triplets), no groove templates.
+- No "commit to pattern" yet (turning quantized recorded drums into pattern steps with microtiming).
+- Changing settings mid-loop can skip or repeat an event that crosses the play head in that loop (§14.5).
+- Quantize ranges for start and end use the same grid and strength.
+- Live input is not quantized on input (only playback of recorded material).
+- Pattern events are not affected (they are already on their step grid with explicit microtiming).
+- The cache refresh is O(2,048) on the audio thread whenever something changes. During recording with quantization on, this happens in every block that captures input (about 17 µs here). An incremental refresh would remove it if the FM-1 budget needs that.
+- Memory: +18 KB per sequencer; FM-1 RAM is undocumented.
+- Nothing has been listened to, and nothing has been run on an FM-1.
+
+## 15. Recommended next steps (in order)
+
+1. Review Engines 019–027 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–027 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
 4. ~~Engine 024: tape processor as an `AudioEffect` inserted into the chain.~~ Done (§11). Possible follow-ups:
@@ -2005,10 +2244,11 @@ numbers; FM-1 CPU and RAM budgets are unverified.
    - reduce drum `trigger()` cost: the choke scan is O(27 × voices) (§7.8);
    - ~~a step sequencer that posts drum and synth events~~ (Engine 025, §12).
 6. ~~Engine 026: live recording, overdubbing, a cross-thread command queue for pattern edits~~ (§13).
-7. Engine 027 (quantisation), building on §13.1:
-   - quantise recorded events to a grid (nearest step, strength, swing) using `nearestStep` / `timingErrorFine`, non-destructively and undoably, keeping the original timing;
-   - optionally commit recorded drums into pattern steps (with microtiming from the signed error);
-   - decide what quantisation does to note lengths and to events near the loop end.
+7. ~~Engine 027: non-destructive quantization (grid, strength, swing, selection, note lengths)~~ (§14). Follow-ups (§14.10):
+   - commit recorded (quantized) drums into pattern steps with microtiming;
+   - triplet/dotted grids, grid offset, groove templates;
+   - per-region selection and undoable quantize settings;
+   - an incremental cache refresh if the FM-1 budget needs it.
 8. Later sequencer candidates (§12.8, §13.9):
    - pattern banks and chaining with switching at loop boundaries;
    - automation lanes;
@@ -2017,7 +2257,7 @@ numbers; FM-1 CPU and RAM budgets are unverified.
 9. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
 10. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
 
-## 15. Change log on this branch
+## 16. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -2089,3 +2329,12 @@ numbers; FM-1 CPU and RAM budgets are unverified.
   - updated `CLAUDE.md` and this report.
 
   No earlier test was changed. The Engine 025 clock and scheduling rules, and synth, drum, effect, tape, sampler and mixer code, were not changed. Engine 003 was not touched.
+- **Engine 027 commit:**
+  - added `core/sequencer/quantize.h`, `tests/audio/engine_027.cpp`, `tests/audio/engine_027_render.cpp` and `tests/audio/engine_027_benchmark.cpp`;
+  - `core/sequencer/sequencer.h`: quantized playback, settings, derived cache, `SetQuantize`, invalid-command counting;
+  - `core/sequencer/recorder.h`: the `SetQuantize` command;
+  - `core/sequencer/recorded_track.h`: revision counter;
+  - `CMakeLists.txt`: three targets, the warning loop, one `unit` and one `render` test entry;
+  - updated `CLAUDE.md` and this report.
+
+  No earlier test was changed. The recorded data model, Engine 025 clock and scheduling, Engine 026 recording and undo, and synth, drum, effect, tape, sampler and mixer code were not changed. Engine 003 was not touched.

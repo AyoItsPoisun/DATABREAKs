@@ -41,6 +41,7 @@
 //   and counts it; recording continues; stored data is never touched.
 
 #include "pattern.h"
+#include "quantize.h"
 #include "recorded_track.h"
 #include "../audio/synth_event.h"
 
@@ -67,6 +68,7 @@ enum class WriteMode : std::uint8_t { Overdub, Replace };
 enum class SequencerCommandType : std::uint8_t {
     Arm, Disarm, SetRecordMode, SetWriteMode, SetTargets, SetPunch, ClearPunch,
     Undo, Redo, ClearRecording,
+    SetQuantize,  // Engine 027
     SetStep, ClearStep, AddNote, RemoveNote, ClearPattern, ConfigurePattern
 };
 
@@ -82,6 +84,7 @@ struct SequencerCommand {
     TimeSignature timeSignature{};
     int bars = 1;
     std::int64_t stepTicks = 240;
+    QuantizeSettings quantize{};  // SetQuantize (Engine 027)
 };
 
 class Recorder {

@@ -114,7 +114,7 @@ public:
         }
         const std::uint32_t id = nextPassId_++;
         passes_[passCount_++] = {id, true, 0};
-        dirty_ = true;
+        markDirty();
         return id;
     }
 
@@ -123,7 +123,7 @@ public:
         for (std::size_t i = passCount_; i > 0; --i) {
             if (passes_[i - 1].active) {
                 passes_[i - 1].active = false;
-                dirty_ = true;
+                markDirty();
                 return passes_[i - 1].id;
             }
         }
@@ -135,7 +135,7 @@ public:
         for (std::size_t i = 0; i < passCount_; ++i) {
             if (!passes_[i].active) {
                 passes_[i].active = true;
-                dirty_ = true;
+                markDirty();
                 return passes_[i].id;
             }
         }
@@ -175,7 +175,7 @@ public:
         events_[count_].createdPass = pass;
         events_[count_].erasedPass = 0;
         if (info != nullptr) ++info->events;
-        dirty_ = true;
+        markDirty();
         return static_cast<int>(count_++);
     }
 
@@ -193,7 +193,7 @@ public:
             e.erasedPass = pass;
             ++n;
         }
-        if (n > 0) dirty_ = true;
+        if (n > 0) markDirty();
         return n;
     }
 
@@ -216,7 +216,7 @@ public:
             if (events_[i].sequence == sequence && events_[i].pending) {
                 events_[i].lengthFine = lengthFine;
                 events_[i].pending = false;
-                dirty_ = true;
+                markDirty();
                 return true;
             }
         }
@@ -227,7 +227,7 @@ public:
     void clear() {
         count_ = 0;
         passCount_ = 0;
-        dirty_ = true;
+        markDirty();
     }
 
     std::size_t size() const { return count_; }
@@ -243,6 +243,10 @@ public:
         for (std::size_t i = 0; i < count_; ++i) n += visible(i) ? 1 : 0;
         return n;
     }
+
+    // Increases on every change to the stored events or pass states
+    // (Engine 027: lets derived caches know when to refresh).
+    std::uint64_t revision() const { return revision_; }
 
     // Statistics.
     std::uint64_t trackFullCount() const { return trackFull_; }
@@ -264,6 +268,12 @@ private:
 
     mutable std::array<bool, MaxEvents> visible_{};
     mutable bool dirty_ = true;
+    std::uint64_t revision_ = 0;  // Engine 027: changes on every mutation
+
+    void markDirty() {
+        dirty_ = true;
+        ++revision_;
+    }
 
     std::uint64_t trackFull_ = 0;
     std::uint64_t passFull_ = 0;
@@ -293,7 +303,7 @@ private:
             if (keep(events_[i])) events_[out++] = events_[i];
         }
         count_ = out;
-        dirty_ = true;
+        markDirty();
     }
 
     void purgeUndone() {
@@ -310,7 +320,7 @@ private:
             }
         }
         passCount_ = out;
-        dirty_ = true;
+        markDirty();
     }
 
     void flattenOldest() {
@@ -322,7 +332,7 @@ private:
         for (std::size_t i = 1; i < passCount_; ++i) passes_[i - 1] = passes_[i];
         --passCount_;
         ++flattened_;
-        dirty_ = true;
+        markDirty();
     }
 };
 
