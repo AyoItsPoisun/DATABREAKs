@@ -27,6 +27,15 @@
 // SAMPLE_RATE = 48000; the clock itself is rate-agnostic and tested at
 // 44.1 and 48 kHz).
 //
+// Engine 026 adds FINE TICKS: 1/1024 of a tick (FinePerTick), used to
+// timestamp recorded performances. The same exact formula is used with
+// O, T0 and t scaled by 1024, so sampleOfFine(t x 1024) == sampleOfTick(t).
+// The spacing of fine ticks is N / (1024 D) samples, below one sample for
+// every supported rate and tempo (worst case 192 kHz at 20 BPM: 0.59), so
+// every sample s has a fine position f = fineAtSample(s) (the latest fine
+// tick at or before s) with sampleOfFine(f) == s exactly: a recording
+// replays on its captured sample.
+//
 // Uses unsigned/signed __int128 (GCC and Clang on 64-bit hosts).
 //
 // Threading: audio thread only (Sequencer::postTransport() offers a queue
@@ -51,6 +60,7 @@ public:
     static constexpr std::int64_t MaxMilliBpm = 300000;
     static constexpr int MinSampleRate = 8000;
     static constexpr int MaxSampleRate = 192000;
+    static constexpr std::int64_t FinePerTick = 1024;  // Engine 026
 
     explicit MusicalClock(int sampleRate = 48000) {
         setSampleRate(sampleRate);
@@ -157,6 +167,35 @@ public:
         // (t - T0) N > (sample - 1) D - O.
         const i128 bound = static_cast<i128>(sample - 1) * d() - originNum_;
         return originTick_ + static_cast<std::int64_t>(floorDiv(bound, n()) + 1);
+    }
+
+    // ---- Fine ticks (Engine 026): 1/1024 tick ----------------------------------
+
+    // Sample at which fine tick `fine` is delivered (first sample at or
+    // after its exact time).
+    std::int64_t sampleOfFine(std::int64_t fine) const {
+        const i128 num = originNum_ * FinePerTick +
+                         static_cast<i128>(fine - originTick_ * FinePerTick) * n();
+        return static_cast<std::int64_t>(ceilDiv(num, d() * FinePerTick));
+    }
+
+    // First fine tick delivered at or after `sample`; for this f,
+    // sampleOfFine(f) == sample (fine spacing is below one sample).
+    std::int64_t firstFineAtOrAfter(std::int64_t sample) const {
+        const i128 bound = static_cast<i128>(sample - 1) * d() * FinePerTick -
+                           originNum_ * FinePerTick;
+        return originTick_ * FinePerTick +
+               static_cast<std::int64_t>(floorDiv(bound, n()) + 1);
+    }
+
+    // Fine position of sample `sample`: the LATEST fine tick whose exact
+    // time is <= sample. It is delivered at `sample` too (fine spacing is
+    // below one sample), i.e. sampleOfFine(fineAtSample(s)) == s, and it is
+    // the fine tick closest to the sample's exact time without exceeding it
+    // (fineAtSample(0) == 0; a sample on an exact tick time maps to that
+    // tick x 1024). This is how recorded input is timestamped (Engine 026).
+    std::int64_t fineAtSample(std::int64_t sample) const {
+        return firstFineAtOrAfter(sample + 1) - 1;
     }
 
     // Musical position (ticks, rounded down) at the current sample.

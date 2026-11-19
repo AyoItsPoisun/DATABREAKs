@@ -1,55 +1,69 @@
 
 #pragma once
 
-// DATABREAKs Engine 025 - pattern sequencer (host-side C++17).
+// DATABREAKs Engine 025/026 - pattern sequencer and performance recorder
+// (host-side C++17).
 //
-// Plays one Pattern against a MusicalClock and turns it into events at
-// exact sample offsets inside each rendered block. AudioPipeline calls
-// process() once per mixSources() block, on the audio thread, and delivers
-// the events through the instruments' scheduled-event paths
-// (DrumEngine::scheduleTrigger, AudioPipeline::scheduleNote*), which apply
-// them at those exact frames. Results therefore do not depend on the block
-// size (tested for 1..4096).
+// Plays one Pattern (Engine 025) and one RecordedTrack (Engine 026)
+// against a MusicalClock and turns them into events at exact sample offsets
+// inside each rendered block. AudioPipeline calls process() once per
+// mixSources() block, on the audio thread, and delivers the events through
+// the instruments' scheduled-event paths (DrumEngine::scheduleTrigger,
+// AudioPipeline::scheduleNote*), which apply them at those exact frames.
+// Results therefore do not depend on the block size (tested for 1..4096).
 //
 // Per block [s0, s0 + n):
-//   1. queued transport commands (postTransport) are applied, in order;
+//   1. queued transport commands (postTransport), then queued sequencer
+//      commands (postCommand: recorder control, pattern edits), then queued
+//      live input (postLive) are taken in, in order;
 //   2. after stop()/reset(): note-offs for every sounding sequenced note at
 //      offset 0;
-//   3. while playing, every tick t with sampleOfTick(t) in [s0, s0 + n) is
-//      covered:
-//        drum step k of loop L on pad p fires at tick
-//          L x lengthTicks + k x stepTicks + microTicks;
-//        note i of loop L starts at L x lengthTicks + startTick and ends
-//          lengthTicks later (also in later loops or after the pattern
-//          wraps);
-//   4. events are sorted by (sample offset, kind, target, pad/note): at the
-//      same sample, note-offs come first (so a note can be re-struck), then
-//      drum triggers in pad order 0..26, then note-ons by target
-//      (mono, FM, poly) and note number;
+//   3. while playing:
+//      a. live inputs due in this block are processed in time order; the
+//         recorder opens/closes passes and erases (Replace) as its head
+//         passes, and records inputs inside the record region (Engine 026);
+//      b. every tick t with sampleOfTick(t) in [s0, s0 + n) is covered:
+//           drum step k of loop L on pad p fires at tick
+//             L x lengthTicks + k x stepTicks + microTicks;
+//           note i of loop L starts at L x lengthTicks + startTick and ends
+//             lengthTicks later;
+//      c. recorded events (visible ones) fire at loop x lengthFine +
+//         startFine, except in the very loop and timeline epoch in which
+//         they were captured (the live input already sounded there);
+//      d. live inputs sound at their own samples;
+//   4. events are sorted by (sample offset, kind, target, pad/note, order):
+//      at the same sample note-offs come first (so a note can be re-struck),
+//      then drum triggers in pad order 0..26, then note-ons by target
+//      (mono, FM, poly) and note number; `order` keeps pattern events, then
+//      recorded events in capture order, then live inputs in arrival order;
 //   5. the clock advances by n samples.
 //
-// Probability (0..100 %): decided by a hash of (seed, loop, lane, step),
-// independent of block size and evaluation order. 0 never fires, 100
-// always fires. A skipped note-on also skips its note-off.
+// Probability (Engine 025): a hash of (seed, loop, lane, step). Recorded
+// events have no probability (they always play).
 //
-// Capacity per block: MaxEventsPerBlock drum triggers + note-ons (extra
-// ones are dropped and counted) plus up to MaxActiveNotes note-offs, which
-// are never dropped. At most MaxActiveNotes sequenced notes can sound at
-// once; a note-on beyond that is dropped and counted.
+// Capacity per block: MaxEventsPerBlock drum triggers + note-ons from the
+// pattern and the recorded track (extra ones are dropped and counted);
+// note-offs and live inputs use reserved space and are never dropped here.
+// At most MaxActiveNotes sequenced/recorded notes sound at once.
 //
-// Threading:
-//   * process(), configuration (pattern(), clock(), setSeed) and the direct
-//     transport calls (start/stop/reset) are AUDIO THREAD ONLY, or while
-//     audio is not running;
-//   * postTransport() may be called from ONE other thread (SPSC queue,
-//     TransportCapacity commands, applied at the start of the next block;
-//     a full queue rejects and counts the command).
+// Threading (ownership model, Engine 026):
+//   * The audio thread OWNS the Pattern, the RecordedTrack and the
+//     recorder state. Only process() and the direct calls below touch them.
+//   * Another thread never mutates them: it sends commands. postTransport()
+//     (start/stop/reset/tempo), postCommand() (arm, disarm, modes, punch,
+//     undo, redo, clear, pattern edits) and postLive() (live input) each
+//     use their own SPSC queue: ONE producer thread per queue (the same
+//     thread may feed all three). They are applied at the start of the next
+//     block. A full queue rejects the item and counts it.
+//   * Direct calls (pattern(), clock(), recorder(), arm(), ...) are AUDIO
+//     THREAD ONLY, or while audio is not running.
 // No allocation, locks or I/O anywhere.
 //
 // Host-side implementation; not validated on FM-1 hardware.
 
 #include "musical_clock.h"
 #include "pattern.h"
+#include "recorder.h"
 #include "../audio/spsc_ring.h"
 #include "../audio/synth_event.h"
 
@@ -67,6 +81,7 @@ struct SequencerEvent {
     SynthTarget target = SynthTarget::Mono; // notes only
     int value = 0;                          // pad (drums) or note number
     int velocity = 0;
+    std::uint64_t order = 0;                // final tie-break (Engine 026)
 };
 
 enum class TransportCommandType : std::uint8_t { Start, Stop, Reset, SetTempo };
@@ -81,6 +96,9 @@ public:
     static constexpr std::size_t MaxEventsPerBlock = 1024;
     static constexpr std::size_t MaxActiveNotes = 256;
     static constexpr std::size_t TransportCapacity = 64;  // usable: 63
+    static constexpr std::size_t CommandCapacity = 64;    // usable: 63
+    static constexpr std::size_t LiveCapacity = 256;      // usable: 255
+    static constexpr std::int64_t Fine = MusicalClock::FinePerTick;
 
     explicit Sequencer(int sampleRate = 48000) : clock_(sampleRate) {}
 
@@ -88,6 +106,8 @@ public:
     const MusicalClock& clock() const { return clock_; }
     Pattern& pattern() { return pattern_; }
     const Pattern& pattern() const { return pattern_; }
+    Recorder& recorder() { return recorder_; }
+    const Recorder& recorder() const { return recorder_; }
 
     // Probability seed (default 1). Same seed + same pattern = same result.
     void setSeed(std::uint64_t seed) { seed_ = seed; }
@@ -97,27 +117,83 @@ public:
 
     void start() { clock_.start(); }
 
-    // Stops; sounding sequenced notes get note-offs at the next block.
+    // Stops; sounding sequenced notes get note-offs at the next block. An
+    // open recording pass is closed and held recorded notes end here.
     void stop() {
+        finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
         clock_.stop();
         flushNotes_ = true;
     }
 
-    // Back to tick 0 (keeps play state); sounding notes are released.
+    // Back to tick 0 (keeps play state); sounding notes are released, an
+    // open recording pass is closed, and a new timeline epoch begins.
     void reset() {
+        finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
         clock_.reset();
+        ++epoch_;
+        if (recorder_.armed_) {
+            recorder_.armFine_ = 0;
+        }
         flushNotes_ = true;
     }
 
     bool playing() const { return clock_.playing(); }
+    std::uint32_t timelineEpoch() const { return epoch_; }
 
-    // ---- Transport (one producer thread) -------------------------------------
+    // ---- Recorder control (audio thread) -------------------------------------
+
+    // Arms recording from the current position (the start of the next
+    // block); with a punch window, recording happens only inside it.
+    void arm() {
+        recorder_.armed_ = true;
+        recorder_.armFine_ = currentFine();
+        recorder_.openPass_ = 0;
+    }
+
+    // Stops recording: closes the open pass; held notes end here.
+    void disarm() {
+        finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
+        recorder_.armed_ = false;
+    }
+
+    // Undo the most recent recording pass (closing it first if it is
+    // open). Returns false if there is nothing to undo.
+    bool undo() {
+        recorder_.openPass_ = 0;
+        const std::uint32_t id = recorder_.track_.undo();
+        if (id == 0) return false;
+        // Notes of the undone pass that are still held are forgotten.
+        std::size_t out = 0;
+        for (std::size_t i = 0; i < recorder_.heldCount_; ++i) {
+            if (recorder_.held_[i].pass != id) recorder_.held_[out++] = recorder_.held_[i];
+        }
+        recorder_.heldCount_ = out;
+        return true;
+    }
+
+    bool redo() { return recorder_.track_.redo() != 0; }
+
+    // Removes all recorded material and undo history.
+    void clearRecording() {
+        recorder_.track_.clear();
+        recorder_.heldCount_ = 0;
+        recorder_.openPass_ = 0;
+    }
+
+    // Live input on the audio thread (same rules as postLive).
+    bool liveEvent(const LiveEvent& event) { return recorder_.queueLive(event); }
+
+    // ---- Cross-thread entry points (one producer thread per queue) -----------
 
     bool postTransport(const TransportCommand& command) {
         return transport_.push(command);
     }
+    bool postCommand(const SequencerCommand& command) { return commands_.push(command); }
+    bool postLive(const LiveEvent& event) { return live_.push(event); }
 
     std::uint32_t droppedTransportCount() const { return transport_.droppedCount(); }
+    std::uint32_t droppedCommandCount() const { return commands_.droppedCount(); }
+    std::uint32_t droppedLiveQueueCount() const { return live_.droppedCount(); }
 
     // ---- Audio thread ----------------------------------------------------------
 
@@ -127,20 +203,27 @@ public:
     template <typename Sink>
     void process(std::size_t frames, Sink&& sink) {
         applyTransportCommands();
+        applyCommands();
+        drainLiveQueue();
         count_ = 0;
         generated_ = 0;
+        orderCounter_ = 0;
 
         if (flushNotes_) {
             for (std::size_t i = 0; i < activeCount_; ++i) {
                 push({0, SequencerEvent::Kind::NoteOff, active_[i].target,
-                      active_[i].note, 0}, true);
+                      active_[i].note, 0, 0}, true);
             }
             activeCount_ = 0;
             flushNotes_ = false;
         }
 
-        if (clock_.playing() && frames > 0) {
-            generate(static_cast<std::int64_t>(frames));
+        if (frames > 0) {
+            if (clock_.playing()) {
+                generate(static_cast<std::int64_t>(frames));
+            } else {
+                playLiveWhileStopped();
+            }
         }
 
         std::sort(events_.begin(), events_.begin() + static_cast<std::ptrdiff_t>(count_),
@@ -148,7 +231,8 @@ public:
                       if (a.offset != b.offset) return a.offset < b.offset;
                       if (a.kind != b.kind) return a.kind < b.kind;
                       if (a.target != b.target) return a.target < b.target;
-                      return a.value < b.value;
+                      if (a.value != b.value) return a.value < b.value;
+                      return a.order < b.order;
                   });
         for (std::size_t i = 0; i < count_; ++i) {
             sink(events_[i]);
@@ -178,20 +262,30 @@ private:
     struct ActiveNote {
         SynthTarget target;
         int note;
-        std::int64_t offTick;
+        std::int64_t offFine;  // absolute fine position of the note-off
     };
+
+    static constexpr std::uint64_t RecordedOrder = 1ull << 40;
+    static constexpr std::uint64_t LiveOrder = 1ull << 41;
+    static constexpr std::int64_t MaxNoteLengthFine = Pattern::MaxNoteLengthTicks * Fine;
 
     MusicalClock clock_;
     Pattern pattern_;
+    Recorder recorder_;
     std::uint64_t seed_ = 1;
+    std::uint32_t epoch_ = 0;
     SpscRing<TransportCommand, TransportCapacity> transport_;
+    SpscRing<SequencerCommand, CommandCapacity> commands_;
+    SpscRing<LiveEvent, LiveCapacity> live_;
 
-    // Worst case per block: MaxActiveNotes flushed note-offs (after stop or
-    // reset), MaxEventsPerBlock triggers/note-ons, and MaxActiveNotes
-    // note-offs for notes that end inside the block.
-    std::array<SequencerEvent, MaxEventsPerBlock + 2 * MaxActiveNotes> events_{};
+    // Worst case per block: MaxActiveNotes flushed note-offs, MaxEventsPerBlock
+    // triggers/note-ons, MaxActiveNotes note-offs ending inside the block,
+    // and every pending live input.
+    std::array<SequencerEvent, MaxEventsPerBlock + 2 * MaxActiveNotes +
+                                   Recorder::MaxPendingLive> events_{};
     std::size_t count_ = 0;
-    std::size_t generated_ = 0;  // drum + note-on events this block
+    std::size_t generated_ = 0;  // limited events this block
+    std::uint64_t orderCounter_ = 0;
     std::array<ActiveNote, MaxActiveNotes> active_{};
     std::size_t activeCount_ = 0;
     bool flushNotes_ = false;
@@ -219,15 +313,23 @@ private:
         return -floorDiv(-a, b);
     }
 
-    // `offs` events use the reserved space; others respect the limit.
-    bool push(const SequencerEvent& e, bool noteOff) {
-        if (!noteOff) {
+    // First fine position delivered at or after the current sample (never
+    // negative: fine ticks with exact times in (-1, 0) do not exist).
+    std::int64_t currentFine() const {
+        return std::max<std::int64_t>(0, clock_.firstFineAtOrAfter(clock_.samplePosition()));
+    }
+
+    // `reserved` events (note-offs, live input) use reserved space; others
+    // respect MaxEventsPerBlock.
+    bool push(SequencerEvent e, bool reserved) {
+        if (!reserved) {
             if (generated_ == MaxEventsPerBlock) {
                 ++dropped_;
                 return false;
             }
             ++generated_;
         }
+        if (e.order == 0) e.order = orderCounter_++;
         events_[count_++] = e;
         return true;
     }
@@ -244,24 +346,266 @@ private:
         }
     }
 
-    std::size_t offsetOf(std::int64_t tick, std::int64_t s0) const {
-        const std::int64_t s = clock_.sampleOfTick(tick) - s0;
+    void applyCommands() {
+        SequencerCommand c;
+        for (std::size_t i = 0; i < CommandCapacity && commands_.pop(c); ++i) {
+            switch (c.type) {
+            case SequencerCommandType::Arm: arm(); break;
+            case SequencerCommandType::Disarm: disarm(); break;
+            case SequencerCommandType::SetRecordMode: recorder_.setRecordMode(c.recordMode); break;
+            case SequencerCommandType::SetWriteMode: recorder_.setWriteMode(c.writeMode); break;
+            case SequencerCommandType::SetTargets: recorder_.setTargets(c.targets); break;
+            case SequencerCommandType::SetPunch: recorder_.setPunch(c.a, c.b); break;
+            case SequencerCommandType::ClearPunch: recorder_.clearPunch(); break;
+            case SequencerCommandType::Undo: undo(); break;
+            case SequencerCommandType::Redo: redo(); break;
+            case SequencerCommandType::ClearRecording: clearRecording(); break;
+            case SequencerCommandType::SetStep:
+                pattern_.setStep(static_cast<std::size_t>(c.a), static_cast<std::size_t>(c.b), c.step);
+                break;
+            case SequencerCommandType::ClearStep:
+                pattern_.clearStep(static_cast<std::size_t>(c.a), static_cast<std::size_t>(c.b));
+                break;
+            case SequencerCommandType::AddNote: pattern_.addNote(c.note); break;
+            case SequencerCommandType::RemoveNote:
+                pattern_.removeNote(static_cast<std::size_t>(c.a));
+                break;
+            case SequencerCommandType::ClearPattern: pattern_.clear(); break;
+            case SequencerCommandType::ConfigurePattern:
+                pattern_.configure(c.timeSignature, c.bars, c.stepTicks);
+                break;
+            }
+        }
+    }
+
+    void drainLiveQueue() {
+        LiveEvent e;
+        for (std::size_t i = 0; i < LiveCapacity && live_.pop(e); ++i) {
+            recorder_.queueLive(e);
+        }
+    }
+
+    // ---- Recording --------------------------------------------------------------
+
+    void closePass() { recorder_.openPass_ = 0; }
+
+    bool passOpenFor(std::int64_t loop) const {
+        const Recorder& r = recorder_;
+        return r.openPass_ != 0 && (r.mode_ == RecordMode::Free || r.openPassLoop_ == loop);
+    }
+
+    // Opens the pass for `loop` if needed (Loop mode: one pass per loop).
+    void ensurePass(std::int64_t loop) {
+        Recorder& r = recorder_;
+        if (r.mode_ == RecordMode::Loop && r.openPass_ != 0 && r.openPassLoop_ != loop) {
+            closePass();
+        }
+        if (r.openPass_ == 0) {
+            r.openPass_ = r.track_.openPass();
+            r.openPassLoop_ = loop;
+        }
+    }
+
+    // Ends held recorded notes at `fine` and closes the open pass.
+    void finishRecordingAt(std::int64_t fine) {
+        Recorder& r = recorder_;
+        for (std::size_t i = 0; i < r.heldCount_; ++i) {
+            const std::int64_t len = std::clamp<std::int64_t>(
+                fine - r.held_[i].startFine, 1, MaxNoteLengthFine);
+            r.track_.finishNote(r.held_[i].sequence, len);
+        }
+        r.heldCount_ = 0;
+        closePass();
+    }
+
+    void recordInput(const LiveEvent& e, std::int64_t fine, std::int64_t loopFine) {
+        Recorder& r = recorder_;
+        const std::int64_t loop = floorDiv(fine, loopFine);
+        RecordedEvent rec;
+        rec.value = e.value;
+        rec.velocity = e.velocity;
+        rec.startFine = fine - loop * loopFine;
+        rec.captureSample = e.sampleTime;
+        rec.captureFine = fine;
+        rec.captureLoop = loop;
+        rec.captureEpoch = epoch_;
+        if (e.type == LiveEventType::DrumHit) {
+            if ((r.targets_ & RecordDrums) == 0) return;
+            ensurePass(loop);
+            rec.kind = RecordedEvent::Kind::Drum;
+            rec.sequence = ++r.sequence_;
+            if (r.track_.add(rec, r.openPass_) >= 0) ++r.recorded_;
+            return;
+        }
+        // Note-on.
+        rec.kind = RecordedEvent::Kind::Note;
+        rec.target = e.target;
+        if ((r.targets_ & targetBit(rec)) == 0) return;
+        if (r.heldCount_ == Recorder::MaxHeldNotes) {
+            ++r.heldFull_;
+            return;
+        }
+        ensurePass(loop);
+        rec.pending = true;
+        rec.sequence = ++r.sequence_;
+        if (r.track_.add(rec, r.openPass_) < 0) return;
+        ++r.recorded_;
+        r.held_[r.heldCount_++] = {rec.sequence, e.target, e.value, fine, r.openPass_};
+    }
+
+    void finishInput(const LiveEvent& e, std::int64_t fine) {
+        Recorder& r = recorder_;
+        for (std::size_t i = 0; i < r.heldCount_; ++i) {
+            if (r.held_[i].target == e.target && r.held_[i].note == e.value) {
+                const std::int64_t len = std::clamp<std::int64_t>(
+                    fine - r.held_[i].startFine, 1, MaxNoteLengthFine);
+                r.track_.finishNote(r.held_[i].sequence, len);
+                for (std::size_t k = i + 1; k < r.heldCount_; ++k) r.held_[k - 1] = r.held_[k];
+                --r.heldCount_;
+                return;
+            }
+        }
+    }
+
+    // Live inputs due in [s0, s1): recorder bookkeeping (passes, Replace
+    // erasure, capture) in time order. Returns the number of due inputs.
+    std::size_t recordBlock(std::int64_t s0, std::int64_t s1, std::int64_t f0,
+                            std::int64_t f1, std::int64_t loopFine) {
+        Recorder& r = recorder_;
+        std::size_t due = 0;
+        while (due < r.pendingCount_ && r.pending_[due].event.sampleTime < s1) ++due;
+
+        // Record region inside this block: [a, b).
+        std::int64_t a = f0;
+        std::int64_t b = f1;
+        if (r.armed_) {
+            a = std::max(a, r.armFine_);
+            if (r.punch_) {
+                a = std::max(a, r.punchIn_ * Fine);
+                b = std::min(b, r.punchOut_ * Fine);
+            }
+            if (r.punch_ && r.openPass_ != 0 && r.punchOut_ * Fine <= f0) {
+                closePass();  // punch-out already passed
+            }
+        }
+        const bool recording = r.armed_ && a < b;
+
+        std::int64_t next = a;              // next unprocessed record position
+        std::int64_t pieceStart = 0;
+        std::int64_t pieceEnd = 0;          // current piece [pieceStart, pieceEnd)
+        auto advanceTo = [&](std::int64_t position) {
+            // Process record pieces (pass handling + Replace erasure) up to
+            // and including the piece that contains `position`.
+            while (recording && next < b && next <= position) {
+                const std::int64_t loop = floorDiv(next, loopFine);
+                const std::int64_t end = std::min(b, (loop + 1) * loopFine);
+                if (r.writeMode_ == WriteMode::Replace) {
+                    const std::int64_t from = next - loop * loopFine;
+                    const std::int64_t to = end - loop * loopFine;
+                    // A pass is opened only when it has something to do.
+                    if (passOpenFor(loop) ||
+                        r.track_.countErasable(from, to, r.targets_) > 0) {
+                        ensurePass(loop);
+                        r.track_.erase(from, to, r.targets_, r.openPass_);
+                    }
+                }
+                pieceStart = next;
+                pieceEnd = end;
+                next = end;
+            }
+        };
+
+        for (std::size_t i = 0; i < due; ++i) {
+            const LiveEvent& e = r.pending_[i].event;
+            if (e.sampleTime < s0) {
+                // Late: sounds at offset 0 and is never recorded; a late
+                // note-off still ends a held recorded note (at f0).
+                ++r.late_;
+                if (e.type == LiveEventType::NoteOff) finishInput(e, clock_.fineAtSample(s0));
+                continue;
+            }
+            const std::int64_t fine = clock_.fineAtSample(e.sampleTime);  // in [f0, f1)
+            advanceTo(fine);
+            const bool inside = recording && fine >= pieceStart && fine < pieceEnd;
+            if (e.type == LiveEventType::NoteOff) {
+                finishInput(e, fine);
+            } else if (inside) {
+                recordInput(e, fine, loopFine);
+            }
+        }
+        advanceTo(b);  // remaining pieces of this block
+
+        if (recording && r.punch_ && r.punchOut_ * Fine <= f1) {
+            closePass();  // punch-out inside this block (exclusive end)
+        }
+        return due;
+    }
+
+    void pushLive(const LiveEvent& e, std::size_t offset, std::uint64_t arrival) {
+        SequencerEvent ev;
+        ev.offset = offset;
+        ev.value = e.value;
+        ev.target = e.target;
+        ev.velocity = e.velocity;
+        ev.order = LiveOrder + arrival;
+        switch (e.type) {
+        case LiveEventType::DrumHit:
+            ev.kind = SequencerEvent::Kind::Drum;
+            ev.target = SynthTarget::Mono;
+            break;
+        case LiveEventType::NoteOn:
+            ev.kind = SequencerEvent::Kind::NoteOn;
+            break;
+        case LiveEventType::NoteOff:
+            ev.kind = SequencerEvent::Kind::NoteOff;
+            ev.velocity = 0;
+            break;
+        }
+        push(ev, true);
+    }
+
+    void removePending(std::size_t count) {
+        Recorder& r = recorder_;
+        for (std::size_t i = count; i < r.pendingCount_; ++i) r.pending_[i - count] = r.pending_[i];
+        r.pendingCount_ -= count;
+    }
+
+    void playLiveWhileStopped() {
+        Recorder& r = recorder_;
+        for (std::size_t i = 0; i < r.pendingCount_; ++i) {
+            pushLive(r.pending_[i].event, 0, r.pending_[i].arrival);
+        }
+        removePending(r.pendingCount_);
+    }
+
+    // ---- Playback ---------------------------------------------------------------
+
+    std::size_t offsetOfFine(std::int64_t fine, std::int64_t s0) const {
+        const std::int64_t s = clock_.sampleOfFine(fine) - s0;
         return static_cast<std::size_t>(s < 0 ? 0 : s);
     }
 
     void generate(std::int64_t frames) {
         const std::int64_t s0 = clock_.samplePosition();
+        const std::int64_t s1 = s0 + frames;
         const std::int64_t tFirst = clock_.firstTickAtOrAfter(s0);
-        const std::int64_t tEnd = clock_.firstTickAtOrAfter(s0 + frames);
-        // Ticks in [tFirst, tEnd) are delivered inside this block.
+        const std::int64_t tEnd = clock_.firstTickAtOrAfter(s1);
+        const std::int64_t f0 = std::max<std::int64_t>(0, clock_.firstFineAtOrAfter(s0));
+        const std::int64_t f1 = clock_.firstFineAtOrAfter(s1);
+        // Ticks in [tFirst, tEnd) and fine positions in [f0, f1) are
+        // delivered inside this block.
 
         const std::int64_t length = pattern_.lengthTicks();
+        const std::int64_t loopFine = length * Fine;
         const std::int64_t stepTicks = pattern_.stepTicks();
         const std::int64_t steps = static_cast<std::int64_t>(pattern_.stepCount());
         const std::int64_t maxMicro = stepTicks / 2;
 
+        // a. Recorder (before playback, so Replace erasure takes effect now).
+        const std::size_t due = recordBlock(s0, s1, f0, f1, loopFine);
+
         if (tEnd > tFirst) {
-            // Drum steps.
+            // b. Pattern drum steps.
             const std::int64_t loopFirst = floorDiv(tFirst - maxMicro, length);
             const std::int64_t loopLast = floorDiv(tEnd - 1 + maxMicro, length);
             for (std::int64_t loop = loopFirst; loop <= loopLast; ++loop) {
@@ -282,14 +626,14 @@ private:
                             ++skipped_;
                             continue;
                         }
-                        push({offsetOf(tick, s0), SequencerEvent::Kind::Drum,
-                              SynthTarget::Mono, static_cast<int>(pad), st.velocity},
+                        push({offsetOfFine(tick * Fine, s0), SequencerEvent::Kind::Drum,
+                              SynthTarget::Mono, static_cast<int>(pad), st.velocity, 0},
                              false);
                     }
                 }
             }
 
-            // Note-ons.
+            // b. Pattern note-ons.
             const std::int64_t nLoopFirst = floorDiv(tFirst, length);
             const std::int64_t nLoopLast = floorDiv(tEnd - 1, length);
             for (std::int64_t loop = nLoopFirst; loop <= nLoopLast; ++loop) {
@@ -306,21 +650,62 @@ private:
                         ++dropped_;
                         continue;
                     }
-                    if (!push({offsetOf(tick, s0), SequencerEvent::Kind::NoteOn,
-                               n.target, n.note, n.velocity}, false)) {
+                    if (!push({offsetOfFine(tick * Fine, s0), SequencerEvent::Kind::NoteOn,
+                               n.target, n.note, n.velocity, 0}, false)) {
                         continue;
                     }
-                    active_[activeCount_++] = {n.target, n.note, tick + n.lengthTicks};
+                    active_[activeCount_++] = {n.target, n.note, (tick + n.lengthTicks) * Fine};
                 }
             }
         }
 
+        // c. Recorded events.
+        const RecordedTrack& track = recorder_.track_;
+        if (f1 > f0 && track.size() > 0) {
+            const std::int64_t rLoopFirst = floorDiv(f0, loopFine);
+            const std::int64_t rLoopLast = floorDiv(f1 - 1, loopFine);
+            for (std::int64_t loop = rLoopFirst; loop <= rLoopLast; ++loop) {
+                for (std::size_t i = 0; i < track.size(); ++i) {
+                    if (!track.visible(i)) continue;
+                    const RecordedEvent& e = track.at(i);
+                    if (e.startFine >= loopFine) continue;
+                    if (loop == e.captureLoop && e.captureEpoch == epoch_) continue;
+                    const std::int64_t fine = loop * loopFine + e.startFine;
+                    if (fine < f0 || fine >= f1) continue;
+                    const std::uint64_t order = RecordedOrder + e.sequence;
+                    if (e.kind == RecordedEvent::Kind::Drum) {
+                        push({offsetOfFine(fine, s0), SequencerEvent::Kind::Drum,
+                              SynthTarget::Mono, e.value, e.velocity, order}, false);
+                        continue;
+                    }
+                    if (activeCount_ == MaxActiveNotes) {
+                        ++dropped_;
+                        continue;
+                    }
+                    if (!push({offsetOfFine(fine, s0), SequencerEvent::Kind::NoteOn,
+                               e.target, e.value, e.velocity, order}, false)) {
+                        continue;
+                    }
+                    active_[activeCount_++] = {e.target, e.value, fine + e.lengthFine};
+                }
+            }
+        }
+
+        // d. Live inputs sound at their own samples (late ones at offset 0).
+        for (std::size_t i = 0; i < due; ++i) {
+            const LiveEvent& e = recorder_.pending_[i].event;
+            const std::int64_t offset = e.sampleTime - s0;
+            pushLive(e, static_cast<std::size_t>(offset < 0 ? 0 : offset),
+                     recorder_.pending_[i].arrival);
+        }
+        removePending(due);
+
         // Note-offs due in this block (including notes started above).
         std::size_t i = 0;
         while (i < activeCount_) {
-            if (active_[i].offTick < tEnd) {
-                push({offsetOf(active_[i].offTick, s0), SequencerEvent::Kind::NoteOff,
-                      active_[i].target, active_[i].note, 0}, true);
+            if (active_[i].offFine < f1) {
+                push({offsetOfFine(active_[i].offFine, s0), SequencerEvent::Kind::NoteOff,
+                      active_[i].target, active_[i].note, 0, 0}, true);
                 active_[i] = active_[--activeCount_];
             } else {
                 ++i;

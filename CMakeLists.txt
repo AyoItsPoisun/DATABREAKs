@@ -41,6 +41,8 @@ add_executable(databreaks_engine_024 tests/audio/engine_024.cpp)
 add_executable(databreaks_engine_024_render tests/audio/engine_024_render.cpp)
 add_executable(databreaks_engine_025 tests/audio/engine_025.cpp)
 add_executable(databreaks_engine_025_render tests/audio/engine_025_render.cpp)
+add_executable(databreaks_engine_026 tests/audio/engine_026.cpp)
+add_executable(databreaks_engine_026_render tests/audio/engine_026_render.cpp)
 
 # Engine 023 host benchmark: reports measurements only; not a CTest test.
 add_executable(databreaks_engine_023_benchmark
@@ -57,6 +59,11 @@ add_executable(databreaks_engine_025_benchmark
     tests/audio/engine_025_benchmark.cpp
 )
 
+# Engine 026 host benchmark: reports measurements only; not a CTest test.
+add_executable(databreaks_engine_026_benchmark
+    tests/audio/engine_026_benchmark.cpp
+)
+
 # Engine 020 host benchmark: reports measurements only; not a CTest test.
 add_executable(databreaks_engine_020_benchmark
     tests/audio/engine_020_benchmark.cpp
@@ -67,6 +74,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(databreaks_engine_020 PRIVATE Threads::Threads)
 target_link_libraries(databreaks_engine_022 PRIVATE Threads::Threads)
 target_link_libraries(databreaks_engine_025 PRIVATE Threads::Threads)
+target_link_libraries(databreaks_engine_026 PRIVATE Threads::Threads)
 
 # Assertion-based host unit tests for the synth/DSP headers.
 add_executable(databreaks_dsp_unit_tests tests/unit/dsp_unit_tests.cpp)
@@ -117,6 +125,9 @@ foreach(target
     databreaks_engine_025
     databreaks_engine_025_render
     databreaks_engine_025_benchmark
+    databreaks_engine_026
+    databreaks_engine_026_render
+    databreaks_engine_026_benchmark
     databreaks_dsp_unit_tests
     databreaks_tape_test
     databreaks_transport_test
@@ -158,6 +169,7 @@ foreach(name
     engine_023
     engine_024
     engine_025
+    engine_026
     tape_test
     transport_test
     tape_character_test
@@ -182,6 +194,7 @@ foreach(name
     engine_023_render
     engine_024_render
     engine_025_render
+    engine_026_render
 )
     add_test(NAME render_${name} COMMAND databreaks_${name})
     set_tests_properties(render_${name} PROPERTIES LABELS render)

@@ -15,7 +15,7 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–025).
+019–026).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -23,7 +23,7 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 025
+### Components through Engine 026
 
 | Header | Purpose | Tested by |
 |---|---|---|
@@ -46,9 +46,11 @@ flashable FM-1 firmware.
 | `core/audio/drum_event_queue.h` | `DrumEvent` and `DrumEventQueue<N>` (Engine 020); since Engine 022 an alias of `SpscRing<DrumEvent, N>` | `engine_020` (incl. a two-thread test) |
 | `core/audio/synth_event.h` | `SynthTarget`, `SynthEventType`, `SynthEvent` — moved unchanged out of `audio_pipeline.h` in Engine 025 (the pipeline includes it) | — |
 | `core/sequencer/musical_time.h` | 960 PPQ ticks, `TimeSignature`, bar/beat/tick conversion (Engine 025) | `engine_025` |
-| `core/sequencer/musical_clock.h` | `MusicalClock`: exact tick↔sample mapping in 128-bit integers, milli-BPM tempo, start/stop/reset (Engine 025) | `engine_025` |
+| `core/sequencer/musical_clock.h` | `MusicalClock`: exact tick↔sample mapping in 128-bit integers, milli-BPM tempo, start/stop/reset (Engine 025); fine ticks (1/1024 tick) and `fineAtSample` for recording timestamps (Engine 026) | `engine_025`, `engine_026` |
 | `core/sequencer/pattern.h` | `Pattern`: 27 drum lanes × up to 256 steps (velocity, probability, microtiming) + up to 512 synth `NoteEvent`s (Engine 025) | `engine_025` |
-| `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025) | `engine_025` (38 checks) |
+| `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025). Engine 026: records live input, plays the recorded track and live input, SPSC command and live-input queues | `engine_025` (38 checks), `engine_026` (55 checks) |
+| `core/sequencer/recorded_track.h` | `RecordedEvent` (raw fine-tick timing, capture sample/loop/epoch), `RecordedTrack`: 2,048 events, 512 per pass, 16-pass undo/redo by pass activity (Engine 026) | `engine_026` |
+| `core/sequencer/recorder.h` | `LiveEvent`, `RecordMode` (Free/Loop), `WriteMode` (Overdub/Replace), `SequencerCommand`, `Recorder` settings/state/limits (Engine 026) | `engine_026` |
 | `core/audio/spsc_ring.h` | `SpscRing<T, N>`: the fixed-capacity lock-free single-producer/single-consumer ring, generalised from Engine 020's queue in Engine 022 (drum and synth events) | `engine_020`, `engine_022` (two-thread tests) |
 | `core/audio/effects/audio_effect.h` | `AudioEffect` interface + `EffectBase<Derived>` (bypass with 20 ms crossfade, wet/dry, reset), `SmoothedValue`, dB helpers (Engine 023) | `engine_023` |
 | `core/audio/effects/equalizer.h` | `Equalizer`: low shelf / mid peak / high shelf + output gain, cookbook biquads (Engine 023) | `engine_023` |
@@ -234,10 +236,50 @@ voice count are independent (default 16 voices, like the manager's default).
   counted), 256 sounding sequenced notes, note-offs never dropped. Transport
   queue: 63 commands from ONE other thread.
 - **Threading:** pattern editing, clock settings and direct transport calls
-  are audio-thread only (or while stopped). `postTransport()` is the only
-  cross-thread entry.
+  are audio-thread only (or while stopped). In Engine 025 `postTransport()`
+  was the only cross-thread entry; Engine 026 adds `postCommand()` (including
+  pattern edits) and `postLive()`.
 - Benchmark: `databreaks_engine_025_benchmark`.
 
+### Engine 026 — recording and performance capture (implemented, host-side only)
+
+- Records **musical events, not audio**: drum hits (pad, velocity) and synth
+  notes (target, note, velocity, length) into `sequencer().recorder().track()`,
+  played back with the Pattern through the same `SequencerEvent` kinds and
+  delivery paths. Nothing is quantised: positions are raw **fine ticks**
+  (1/1024 tick), loop-relative; `nearestStep`/`timingErrorFine` are for
+  Engine 027.
+- **Input:** `LiveEvent{type, target, value, velocity, sampleTime}` where
+  `sampleTime` is the absolute clock sample of the input (no latency
+  compensation anywhere). `postLive()` from one other thread, or
+  `liveEvent()` on the audio thread. Input sounds at its own sample and,
+  while recording, is stored at `clock.fineAtSample(sampleTime)` (latest fine
+  tick at or before it), so it replays on exactly that sample in later loops.
+  Late input (timestamp before the block) sounds at offset 0, is not
+  recorded, and is counted. While stopped, input sounds at once and is not
+  recorded.
+- **Modes:** Free (one pass arm→disarm/punch-out/stop/reset) or Loop (one
+  pass per loop); Overdub or Replace (erases armed kinds in the covered region
+  as the head passes); punch [in, out) in absolute ticks; `RecordTargets`
+  mask. Passes open lazily (only when they record or erase). The capture loop
+  is not replayed from the recording (the live input already sounded); a
+  `reset()` starts a new epoch.
+- **Boundaries:** start inclusive, end exclusive everywhere; an input exactly
+  on the loop end is position 0 of the next loop.
+- **Undo/redo:** by pass activity, nothing deleted while undoable, 16
+  passes (the oldest is then flattened). Undo restores the exact previous
+  state. A new pass discards redo history.
+- **Ownership:** the audio thread owns Pattern, RecordedTrack and recorder
+  state. Other threads use `postTransport`, `postCommand` (arm/disarm/modes/
+  punch/undo/redo/clear and pattern edits) and `postLive`: three SPSC
+  queues, one producer thread each, applied at the next block. Direct
+  calls are audio-thread only. No mutex, no allocation.
+- **Limits** (drop and count, never stop or corrupt): 2,048 events, 512 per
+  pass, 16 undo passes, 64 notes being recorded, 512 pending inputs, queues
+  255/63/63, plus Engine 025's per-block and active-note limits. `Sequencer`
+  is now 411,328 bytes.
+- Full details: `docs/PROGRESS_REPORT.md` §13. Benchmark:
+  `databreaks_engine_026_benchmark` (built, not a CTest test).
 
 ## Hardware constraints and safety rules
 
@@ -266,7 +308,7 @@ voice count are independent (default 16 voices, like the manager's default).
 ```
 core/audio/                 engine-wide types, mixers, tape, sampler, pads, pipeline
 core/audio/effects/         EQ, compressor, soft clipper, tape, distortion, reverb, chain
-core/sequencer/             musical time, clock, pattern, sequencer (Engine 025)
+core/sequencer/             musical time, clock, pattern, sequencer (025), recorder (026)
 instruments/synthesizers/   mono / FM / poly synths, ADSR
 tests/audio/engine_NNN.cpp  one program per engine milestone (render demo or assertion test)
 tests/audio/tape_*_test.cpp assertion tests for tape components
@@ -282,7 +324,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 33 tests
+ctest --test-dir build --output-on-failure          # all 35 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 
