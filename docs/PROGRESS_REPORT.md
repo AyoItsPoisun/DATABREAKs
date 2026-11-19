@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-19 for Engine 022 on branch `claude/engine-019-prep-transfer`.
-Engine 022 starts from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-19 for Engine 023 on branch `claude/engine-019-prep-transfer`.
+Engine 023 starts from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -14,11 +14,12 @@ History of this report:
 - **`ce44e70`:** updated for Engine 019 (drum voice integration).
 - **`dfd3164`:** updated for Engine 020 (drum engine performance and reliability).
 - **`100a8e1`:** updated for Engine 021 (unified audio pipeline).
-- **Engine 022 commit:** updated for Engine 022 (synthesizer integration); the outcomes of findings B1–B4 were added in §4.1.
+- **`d326959`:** updated for Engine 022 (synthesizer integration); the outcomes of findings B1–B4 were added in §4.1.
+- **Engine 023 commit:** updated for Engine 023 (effects engine).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 022**:
+The repository contains host-side C++17 prototypes through **Engine 023**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -29,7 +30,8 @@ The repository contains host-side C++17 prototypes through **Engine 022**:
 - drum voice integration (019);
 - drum engine performance and reliability (020);
 - a unified audio pipeline (021): drums → drum level → `StereoMixer` master;
-- **synthesizer integration** (022): stateful mono, FM and poly synths with note-on/off, velocity and pitch bend, as pipeline sources alongside the drums. Findings B1–B4 are fixed in the new voices.
+- synthesizer integration (022): stateful mono, FM and poly synths with note-on/off, velocity and pitch bend, as pipeline sources alongside the drums. Findings B1–B4 are fixed in the new voices;
+- **an effects engine** (023): EQ, compressor, soft clipper, distortion and reverb in an ordered chain on the combined bus, between the sources and the master.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -42,15 +44,35 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–022 have been run only on a
+pad scanning, storage or boot code. Engines 019–023 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 022 commit
+### 2.1 Engine 023 commit
 
-Same environment as §2.3.
+Same environment as §2.4.
+
+| Check | Result |
+|---|---|
+| Default build | 31 executables (29 registered tests + the Engine 020 and 023 benchmarks), **0 warnings** |
+| `ctest --test-dir build --output-on-failure` | **29/29 pass** (the 27 existing tests plus `engine_023` and `render_engine_023_render`) |
+| `-L unit` / `-L render` | **16/16** / **13/13 pass** |
+| `engine_023` | **48/48 checks**. `engine_017` 22, `engine_019` 50, `engine_020` 29, `engine_021` 17 and `engine_022` 29: all unchanged and passing |
+| Release `-O3 -DNDEBUG` | **0 warnings, 29/29 pass** |
+| ASan + UBSan (Debug, leak detection on) | **0 warnings, 29/29 pass**, no reports |
+| ThreadSanitizer | `engine_020` 29/29, `engine_021` 17/17, `engine_022` 29/29, `engine_023` 48/48, no reports |
+| Allocation | `engine_023` RT1 and every benchmark row: 0 allocations. Earlier allocation checks still pass |
+| Existing renders | The 16 reference WAVs are byte-identical to `e54db9b`'s; the Engine 021 demo is byte-identical to the committed WAV; the Engine 022 demo is byte-identical to the Engine 022 render (MD5 `0cfa5643…`) |
+| New demo | `databreaks_engine_023_demo.wav`: valid, and byte-identical across runs and three build types (§10.5) |
+| Benchmark | §10.6 (host measurements) |
+| `git diff --check` | Clean |
+| Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
+
+### 2.2 Engine 022 commit (`d326959`)
+
+Same environment as §2.4.
 
 | Check | Result |
 |---|---|
@@ -67,7 +89,7 @@ Same environment as §2.3.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.2 Engine 021 commit (`100a8e1`)
+### 2.3 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -86,7 +108,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.3 Engine 020 commit (`dfd3164`)
+### 2.4 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -106,7 +128,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.4 Engine 019 commit (`ce44e70`, for reference)
+### 2.5 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -126,9 +148,10 @@ WAVs byte-identical to `e54db9b`.
 | `DrumPadBank<27>` | 018 | Working prototype, tested | **Unchanged**. Its `active` flag is now kept in sync by `DrumEngine` |
 | `DrumEngine<N, E>` | 019, 020 | Working prototype, tested | See §6 and §7 |
 | `DrumEventQueue<N>` | 020 | Working prototype, tested | Lock-free single-producer/single-consumer ring; see §7.4 |
-| `AudioPipeline<V, E, S>` | 021, 022 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths; see §8 and §9 |
+| `AudioPipeline<V, E, S>` | 021–023 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths → effects chain → master; see §8–§10 |
+| Effects (`core/audio/effects/`) | 023 | Working prototype, tested | EQ, compressor, soft clipper, distortion, reverb, `EffectChain`; see §10 |
 | `SpscRing<T, N>` | 020, 022 | Working prototype, tested | Generalised drum queue; carries drum and synth events |
-| MIDI byte input, sequencing, effects | — | Not started | The pipeline's `post*` queues are the hand-off point for input. New sources go into `AudioPipeline::mixSources` |
+| MIDI byte input, sequencing, effect automation, tape in the chain | — | Not started (tape: Engine 024) | The pipeline's `post*` queues are the hand-off point for input. New sources go into `AudioPipeline::mixSources` |
 | Firmware (HAL, drivers, display, pads, storage, boot) | — | Not started | Depends on hardware facts that are not yet documented |
 
 ## 4. DSP findings (synth/envelope code, carried over unchanged)
@@ -993,21 +1016,251 @@ nobody has listened to it yet.
 - 255 posted synth events per block at most; the rest are dropped and counted.
 - Nothing has been run on an FM-1.
 
-## 10. Recommended next steps (in order)
+## 10. Engine 023: effects engine
 
-1. Review Engines 019–022 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022 demo render.
+Files:
+
+- new, in `core/audio/effects/`: `audio_effect.h`, `equalizer.h`, `compressor.h`, `soft_clipper.h`, `distortion.h`, `reverb.h`, `effect_chain.h`;
+- new tests: `tests/audio/engine_023.cpp` (`unit`), `tests/audio/engine_023_render.cpp` (`render`), `tests/audio/engine_023_benchmark.cpp` (built, not a test);
+- changed: `core/audio/audio_pipeline.h` (effects stage), `CMakeLists.txt`.
+
+No existing class changed behaviour. All earlier tests pass unchanged. The 16
+reference WAVs, the committed Engine 021 demo and the Engine 022 demo (MD5
+`0cfa5643…`) are byte-identical.
+
+### 10.1 What existed before
+
+There was no standalone EQ, compressor, distortion or reverb.
+`TapeMachine::process()` contains tape-specific DSP that is private and fixed:
+
+- a fixed-threshold (0.45) compressor;
+- `tanh` saturation;
+- one-pole tape filters.
+
+It is not reusable as general effects. Engine 023 does not duplicate or
+replace it; Engine 024 will bring the whole tape stage into the chain.
+
+Signal flow before Engine 023:
+
+```
+mixSources (drums + mono/FM/poly, each × level) → applyMaster (× master, hard clip)
+```
+
+### 10.2 Architecture
+
+```
+render(out, n) = mixSources → applyEffects → applyMaster
+
+applyEffects = EffectChain<8>, in place on the summed bus, in order:
+  Equalizer → Compressor → SoftClipper → Distortion → Reverb
+  (Engine 024: pipeline.effects().insert(position, &tape))
+```
+
+- **Common base.** `AudioEffect` is a small polymorphic interface: one virtual call per block. `EffectBase<Derived>` runs the per-sample `Derived::tick()` inline and applies:
+  - wet/dry mix: exactly the input at 0, exactly the effect output at 1;
+  - bypass with a 20 ms linear crossfade;
+  - `reset()`.
+- **Full bypass.** A fully bypassed effect returns immediately: no processing, bit-exact output. An effect leaving full bypass is reset, with its parameters and mix snapped to their set values, so stale state never bursts back in and output doesn't depend on history.
+- **Defaults.** Every effect in the pipeline starts **fully bypassed**, which keeps every earlier render bit-identical. When an effect is enabled it uses the default settings listed in §10.3.
+- **Gain staging.** Each source level is applied once, each effect once, in order, and the master once. Effects process the combined bus. Bypassed effects never touch it.
+- **Event timing.** Drum and synth events are applied inside `mixSources()`, before the effects, so their frame accuracy is unchanged. Check PI5: silence through frame 36, sound at frame 37 with every effect enabled.
+- **Smoothing.** Parameters that could click glide linearly over 20 ms per sample (`SmoothedValue`), so results don't depend on block size: gains, frequencies (in log space), Q, threshold, ratio, knee, makeup, drive, output levels, room size, decay, damping, wet, dry and width. Distortion mode changes crossfade over 20 ms.
+- **Threading.** All effect parameters and `process()` run on **one** (audio) thread. There is no control queue for effect parameters yet, and the engine is not described as thread-safe. Drum and synth event queues are unchanged.
+- **Real-time behaviour.** No allocation, locks or I/O in `process()` or any setter. All state, including reverb delay lines, is in fixed `std::array` members.
+
+### 10.3 Effects, DSP and parameter ranges
+
+Non-finite values are always ignored and out-of-range values clamped.
+
+| Effect | DSP | Parameters (range, default) | State size (`sizeof`) |
+|---|---|---|---|
+| `Equalizer` | Low shelf → mid peak → high shelf → output gain, per channel. Biquads from the published Audio EQ Cookbook equations (implemented here), transposed direct form II. Coefficients are recomputed per sample only while gliding. A 0 dB band is skipped, so a flat EQ is bit-exact | Low 20–1000 Hz (120), mid 100–10000 Hz (1000), high 1000–18000 Hz (8000), each gain ±18 dB (0); mid Q 0.2–8 (0.7); output ±18 dB (0) | 632 B |
+| `Compressor` | Stereo-linked peak detector; one-pole envelope with attack/release; soft-knee curve in dB; gain applied equally to both channels; makeup; mix for parallel compression; gain-reduction meter | Threshold −60–0 dBFS (−18), ratio 1–20 (4), knee 0–24 dB (6), attack 0.1–200 ms (10), release 10–2000 ms (120), makeup −12–+24 dB (0) | 304 B |
+| `SoftClipper` | Linear for \|x\| ≤ knee; above it k + (c−k)·tanh((\|x\|−k)/(c−k)). Value and slope are continuous at the knee and the output never exceeds the ceiling. This is separate from the master's hard safety clip | Drive 0–24 dB (0), knee 0.1–0.99 × ceiling (0.7), ceiling 0.1–1.0 (1.0) | 184 B |
+| `Distortion` | Soft: tanh. Asymmetric: 1−e^−x for the positive half, −(1−e^1.6x)/1.6 for the negative half (adds even harmonics). Fuzz: 4x + 0.2 bias, clipped, cubic corner, shifted so 0 maps to 0. Every shape is bounded and maps 0 to 0; a ~10 Hz DC blocker follows; modes crossfade over 20 ms | Mode (soft), drive 0–36 dB (12), output −36–+6 dB (−6) | 256 B |
+| `Reverb` | Mid → DC blocker → 4 allpass diffusers; side → DC blocker; an 8-line feedback delay network (lengths 1427–3517 samples × room size) with a Householder matrix, per-line damping low-pass and RT60-derived gains; two output sign patterns for L/R; mid/side width; dry and wet levels. Contractive loop (orthogonal matrix, gains < 1), so it is stable for every setting. Values below 1e-25 are flushed, so tails end in exact silence | Room size 0.25–1.0 (0.7), decay RT60 0.2–10 s (1.8), damping 0–1 (0.4), wet 0–1 (0.3), dry 0–1 (1.0), width 0–1 (1.0) | 163,560 B |
+| All | Common: bypass, mix 0–1 (1.0) | | |
+
+The defaults apply once an effect is enabled.
+
+**Memory.** The reverb's delay storage is fixed at 162,808 bytes: (19,446 tank
++ 905 diffuser samples) × 8 bytes. That would be about 81 KB if ported to
+`float`. Everything else is under 1 KB per effect. The whole `AudioPipeline`
+object grows by about 165 KB. The FM-1's RAM is undocumented, so this has not
+been checked against any hardware budget.
+
+### 10.4 Tests: `tests/audio/engine_023.cpp`, 48 checks, all passing
+
+**EQ (EQ1–EQ7)**
+
+- Flat EQ is bit-exact (EQ1).
+- Measured response:
+  - low shelf +12 dB → +12.0 dB at 30 Hz, ~0 at 5 kHz;
+  - mid +9 dB → +9.0 dB at 1 kHz;
+  - high shelf −12 dB → −12 dB at 18 kHz (±1 dB).
+- Poles are inside the unit circle at every range corner.
+- A +18 dB change glides without steps.
+- Invalid values are handled.
+
+**Compressor (CO1–CO6)**
+
+- Static curve: exactly 9 dB of reduction at 12 dB over threshold (4:1), and a continuous knee.
+- Sustained −6 dBFS tone: steady output peak within 0.5 dB of the expected −15 dBFS.
+- Step input: gain reduction after one 10 ms attack within 0.1 dB of theory, above 8.9 dB after 50 ms.
+- Release after 100 ms within 0.15 dB of theory.
+- Parallel mix and makeup.
+- Validation.
+
+**Soft clipper (SC1–SC4)**
+
+- Bit-exact below the knee.
+- Monotonic and never above the ceiling up to |x| = 100.
+- Slope 1 at the knee.
+- Exact tanh values and slope 0.66 above the knee.
+- +24 dB drive stays at or below 1.0.
+
+**Distortion (DI1–DI5)**
+
+- All modes bounded at +36 dB drive.
+- Silence maps to exact silence.
+- Soft has odd harmonics only (H2/H1 below 1e-6); asymmetric adds H2.
+- DC removed on both channels (mean 6e-16).
+- Mode switch crossfades without a step.
+
+**Reverb (RV1–RV10)**
+
+- Memory as documented.
+- Impulse decays 32.7 dB in 0.5 s for RT60 = 1 s (theory: 30).
+- Wet output starts after the shortest delay.
+- Out-of-phase noise at maximum size/decay with no damping is stable for 60 s and decays 354 dB.
+- Finished tail is exact silence.
+- Constant DC input: no DC build-up (mean below 1e-4).
+- Wet 0 is bit-exact; width 0 gives L = R.
+- Size and decay changes glide.
+- Validation.
+
+**Common (BY1–BY3, MX1–MX2, RS1, NL1, CH1)**
+
+- Bypass is bit-exact after the fade, and the fade has no jump.
+- Mix 0 is exact; mix 0.5 is the exact midpoint.
+- `reset()` makes an effect behave like a new instance.
+- Null and empty buffers are safe.
+- Chain insert/remove/capacity/indexOf work.
+
+**Pipeline (PI1–PI6, AU1, RT1)**
+
+- Chain order; all bypassed by default.
+- Drums + mono + FM + poly through all five effects: changed, no clipping.
+- Block sizes 1/7/64/333/4096 bit-identical; repeat renders bit-identical.
+- Event timing intact.
+- 60 s stable with a 10 s reverb.
+- Per-block automation of every effect: largest step 0.25 or less.
+- Zero allocations over 2,000 rounds of processing, parameter changes, mode switches, bypass toggles and events.
+
+Mutation checks, all caught:
+
+- bypass never completing;
+- reverb loop gain above 1;
+- attack/release swapped;
+- EQ gain not smoothed;
+- either DC blocker removed;
+- silence flush removed;
+- mix not snapped on enable;
+- hard clip instead of soft;
+- chain order changed.
+
+Three of these first survived and the tests were strengthened:
+
+- the right-channel DC blocker (DI4 now checks both channels);
+- the hard clip (SC4 added);
+- chain order (PI1 now checks every slot).
+
+Issues found during development and fixed:
+
+- The reverb originally fed only the mono sum, so out-of-phase input produced no reverb. The side signal is now injected too.
+- An immediate enable left the mix gliding, which made repeated renders differ. Leaving full bypass now snaps the mix.
+
+### 10.5 Render demonstration: `render_engine_023_render`
+
+The demo is an original piece in six 2-bar sections at 120 BPM, 4 s each:
+
+| Section | Content | RMS | Difference from the all-bypassed render |
+|---|---|---|---|
+| 1 | Dry drums | 0.0965 | none (bit-identical) |
+| 2 | Compressed drums | 0.0671 | −4.0 dB |
+| 3 | Distorted drums (asymmetric, then fuzz) | 0.1451 | −7.2 dB |
+| 4 | FM melody with reverb | 0.0848 | −2.7 dB |
+| 5 | Mono bass with EQ | 0.1748 | −4.3 dB |
+| 6 | Poly chords and drums through the complete chain | 0.1940 | −4.4 dB |
+
+The difference column is relative to each section's level.
+
+Output: `databreaks_engine_023_demo.wav`, 26.0 s, 48 kHz, 16-bit stereo PCM.
+It is written into the build directory and not committed. All 202 events are
+applied and none dropped; peak −1.85 dBFS; 0 clipped samples.
+
+The program checks that the dry section is bit-identical to the all-bypassed
+render, that every effect section differs, and that a second render is
+bit-identical.
+
+MD5 `9cbaecbb40c0b048e7d8dcb99565230d`, identical across runs and the default,
+Release and ASan builds. The format was checked independently with Python's
+`wave` module. It is a software render, not an FM-1 recording, and nobody has
+listened to it yet.
+
+### 10.6 Benchmark (host only: 4-vCPU Xeon @ 2.1 GHz virtual machine, GCC 13.3)
+
+`databreaks_engine_023_benchmark`, 10 s of stereo audio per row, CPU time via
+`std::clock`, Release `-O3`:
+
+| Processing | ns per frame | Real-time factor |
+|---|---|---|
+| Equalizer (3 bands active) | 20.8 | 1003× |
+| Compressor | 44.7 | 466× |
+| SoftClipper | 13.0 | 1604× |
+| Distortion soft / asymmetric / fuzz | 85.8 / 65.2 / 50.2 | 243× / 320× / 415× |
+| Reverb | 96.5 | 216× |
+| Full chain, block 16 / 128 / 1024 | 159 / 146 / 137 | 131× / 143× / 152× |
+| Full chain, all bypassed | 0.1 | — |
+| Complete pipeline (drums + 3 synths + master), effects bypassed / on | 185 / 331 | 113× / 63× |
+
+All rows: 0 allocations.
+
+The unoptimised default build is about 3–5 times slower: full chain 29×, and
+the complete pipeline with effects 15.7×. Repeated runs on this shared
+machine vary by up to about 20%.
+
+These are measurements of a desktop-class host. They say nothing about
+whether the FM-1 can run this chain in real time.
+
+### 10.7 Remaining limitations
+
+- There is no control queue for effect parameters (audio thread only), and no automation or sequencer yet. The per-sample smoothing is the foundation for both.
+- There is no oversampling: high distortion drive aliases. EQ shelves are fixed at slope 1; there are no extra bands.
+- The compressor has no sidechain, lookahead or RMS detection.
+- The reverb has no pre-delay or modulation, and its delay memory is fixed at its maximum size.
+- Room-size glides briefly bend the pitch of the tail.
+- All processing is `double`. Cost and memory on the FM-1 are unknown.
+- Tape is not yet in the chain (Engine 024).
+- Nothing has been listened to, and nothing has been run on an FM-1.
+
+## 11. Recommended next steps (in order)
+
+1. Review Engines 019–023 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022 and 023 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
-4. Engine 023 candidates:
-   - per-frame smoothing for levels and pitch bend;
+4. Engine 024: tape processor as an `AudioEffect` inserted into the chain (§10.2).
+5. Later candidates:
+   - a control/automation queue for effect parameters;
+   - per-frame smoothing for source levels and pitch bend;
    - per-pad / per-voice pan;
    - velocity curves;
    - reduce drum `trigger()` cost: the choke scan is O(27 × voices) (§7.8);
    - a step sequencer that posts drum and synth events.
-5. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
-6. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
+6. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
+7. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
 
-## 11. Change log on this branch
+## 12. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -1046,3 +1299,10 @@ nobody has listened to it yet.
   - updated `CLAUDE.md` and this report.
 
   The original synth classes, `calculateEnvelope`, `LayeringMixer`, `StereoMixer`, tape, `SamplePlayer`, `SampleSliceMap`, `DrumPadBank` and `DrumEngine` were not changed. Engine 003 was not touched.
+- **Engine 023 commit:**
+  - added `core/audio/effects/` (`audio_effect.h`, `equalizer.h`, `compressor.h`, `soft_clipper.h`, `distortion.h`, `reverb.h`, `effect_chain.h`), `tests/audio/engine_023.cpp`, `tests/audio/engine_023_render.cpp` and `tests/audio/engine_023_benchmark.cpp`;
+  - `core/audio/audio_pipeline.h`: effects chain stage (all bypassed by default);
+  - `CMakeLists.txt`: three targets, the warning loop, one `unit` and one `render` test entry;
+  - updated `CLAUDE.md` and this report.
+
+  No synth, drum, tape, sampler, mixer or queue code changed. Engine 003 was not touched.

@@ -1,7 +1,7 @@
 
 #pragma once
 
-// DATABREAKs Engine 021/022 - unified host-side audio pipeline (C++17).
+// DATABREAKs Engine 021-023 - unified host-side audio pipeline (C++17).
 //
 // One rendering path for all sound sources and the master output:
 //
@@ -10,7 +10,12 @@
 //     mono:  MonoSynthEngine (1 voice)  -> sum -> x monoLevel   (Engine 022)
 //     fm:    FmSynthEngine (4 voices)   -> sum -> x fmLevel     (Engine 022)
 //     poly:  PolySynthEngine (8 voices) -> sum -> x polyLevel   (Engine 022)
-//     (future: effects returns, sequencer-driven sources)
+//     (future: sequencer-driven sources)
+//         |
+//         v
+//   effects (Engine 023, in place on the summed bus, in chain order):
+//     EQ -> Compressor -> SoftClipper -> Distortion -> Reverb
+//     (all bypassed by default; Engine 024 inserts tape via effects())
 //         |
 //         v
 //   master: StereoMixer (existing Engine 003 class)
@@ -49,6 +54,12 @@
 #include "drum_engine.h"
 #include "mixer.h"
 #include "spsc_ring.h"
+#include "effects/compressor.h"
+#include "effects/distortion.h"
+#include "effects/effect_chain.h"
+#include "effects/equalizer.h"
+#include "effects/reverb.h"
+#include "effects/soft_clipper.h"
 #include "../../instruments/synthesizers/synth_engine.h"
 
 #include <algorithm>
@@ -93,7 +104,31 @@ public:
         // Unity master by default so that levels are easy to reason about.
         // (StereoMixer's own default is 0.8.)
         master_.setMasterVolume(1.0);
+
+        // Engine 023 effects chain. Every effect starts fully bypassed, so
+        // a pipeline that never enables one renders exactly as in
+        // Engine 022 (bit-exact).
+        effects_.append(&eq_);
+        effects_.append(&compressor_);
+        effects_.append(&softClipper_);
+        effects_.append(&distortion_);
+        effects_.append(&reverb_);
+        for (std::size_t i = 0; i < effects_.size(); ++i) {
+            effects_.slot(i)->setBypassed(true, true);
+        }
     }
+
+    // ---- Effects (Engine 023, audio thread) --------------------------------
+
+    Equalizer& eq() { return eq_; }
+    Compressor& compressor() { return compressor_; }
+    SoftClipper& softClipper() { return softClipper_; }
+    Distortion& distortion() { return distortion_; }
+    Reverb& reverb() { return reverb_; }
+
+    // The ordered chain (insert() is the hook for later stages, e.g. tape).
+    EffectChain<8>& effects() { return effects_; }
+    const EffectChain<8>& effects() const { return effects_; }
 
     // ---- Sources -------------------------------------------------------------
 
@@ -188,15 +223,23 @@ public:
     // ---- Rendering (audio thread) ----------------------------------------------
 
     // Final output. ADDS every source into `output` (existing contents, e.g.
-    // audio mixed earlier into the same bus, are kept and summed), then runs
-    // the master stage over the whole buffer once. Call it once per block as
-    // the last stage. The caller clears the buffer for a fresh mix.
+    // audio mixed earlier into the same bus, are kept and summed), runs the
+    // effects chain over the whole bus, then the master stage once. Call it
+    // once per block as the last stage. The caller clears the buffer for a
+    // fresh mix.
     void render(StereoFrame* output, std::size_t frameCount) {
         if (output == nullptr || frameCount == 0) {
             return;
         }
         mixSources(output, frameCount);
+        applyEffects(output, frameCount);
         applyMaster(output, frameCount);
+    }
+
+    // Runs the effects chain in place (Engine 023). Bypassed effects are
+    // skipped entirely.
+    void applyEffects(StereoFrame* output, std::size_t frameCount) {
+        effects_.process(output, frameCount);
     }
 
     // Adds every source into `output` at its own level, without the master
@@ -258,6 +301,12 @@ private:
     SynthQueue synthQueue_;
     std::uint64_t processedSynthEvents_ = 0;
     StereoMixer master_;
+    Equalizer eq_;
+    Compressor compressor_;
+    SoftClipper softClipper_;
+    Distortion distortion_;
+    Reverb reverb_;
+    EffectChain<8> effects_;
     std::uint64_t clippedSamples_ = 0;
     std::uint64_t invalidSamples_ = 0;
 

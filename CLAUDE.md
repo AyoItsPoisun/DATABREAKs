@@ -15,7 +15,7 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–022).
+019–023).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -23,13 +23,13 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 022
+### Components through Engine 023
 
 | Header | Purpose | Tested by |
 |---|---|---|
 | `core/audio/audio_engine.h` | 48 kHz stereo constants, `StereoFrame`, `midiToHz`, `clampAudio` | `dsp_unit_tests` |
 | `core/audio/mixer.h` | `StereoMixer` (master gain + hard clip). Since Engine 021 it is the master stage of `AudioPipeline` | `dsp_unit_tests`, `engine_021` |
-| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the `StereoMixer` master stage; frame-accurate queued synth note events | `engine_021` (17), `engine_022` (29), both render demos |
+| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023), then the `StereoMixer` master stage; frame-accurate queued synth note events | `engine_021` (17), `engine_022` (29), `engine_023` (48), the render demos |
 | `core/audio/layering_mixer.h` | `LayeringMixer`: mono + FM + poly layer volumes, master | render demos 003/004 only |
 | `instruments/synthesizers/{mono,fm,poly}_synth.h`, `synth_parameters.h` | Original `MonoSynth`, `FMSynth`, `PolySynth` and stateless `calculateEnvelope` (Engines 002–004). **Unchanged** (findings B1–B4 still apply to them) so the 002–004 reference renders stay byte-identical | `dsp_unit_tests`, render demos 002–004 |
 | `instruments/synthesizers/synth_voices.h` | Stateful `AdsrEnvelope`, `MonoVoice`, `FmVoice`, `PolyVoice`: same parameter structs and formulas, with phase accumulators and stateful envelopes (fix B1–B4); `sanitized()` parameter guards (Engine 022) | `engine_022` (matches the originals to ~1e-12) |
@@ -45,6 +45,13 @@ flashable FM-1 firmware.
 | `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16, EventCapacity = 256>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019); click-free voice stealing, frame-accurate queued events, statistics (Engine 020) | `engine_019` (50 checks), `engine_020` (29 checks) |
 | `core/audio/drum_event_queue.h` | `DrumEvent` and `DrumEventQueue<N>` (Engine 020); since Engine 022 an alias of `SpscRing<DrumEvent, N>` | `engine_020` (incl. a two-thread test) |
 | `core/audio/spsc_ring.h` | `SpscRing<T, N>`: the fixed-capacity lock-free single-producer/single-consumer ring, generalised from Engine 020's queue in Engine 022 (drum and synth events) | `engine_020`, `engine_022` (two-thread tests) |
+| `core/audio/effects/audio_effect.h` | `AudioEffect` interface + `EffectBase<Derived>` (bypass with 20 ms crossfade, wet/dry, reset), `SmoothedValue`, dB helpers (Engine 023) | `engine_023` |
+| `core/audio/effects/equalizer.h` | `Equalizer`: low shelf / mid peak / high shelf + output gain, cookbook biquads (Engine 023) | `engine_023` |
+| `core/audio/effects/compressor.h` | `Compressor`: stereo-linked feed-forward, soft knee, attack/release, makeup (Engine 023) | `engine_023` |
+| `core/audio/effects/soft_clipper.h` | `SoftClipper`: linear below the knee, tanh above, never above the ceiling (Engine 023) | `engine_023` |
+| `core/audio/effects/distortion.h` | `Distortion`: soft / asymmetric / fuzz, DC blocker, mode crossfade (Engine 023) | `engine_023` |
+| `core/audio/effects/reverb.h` | `Reverb`: 8-line feedback delay network, fixed 162,808-byte delay storage (Engine 023) | `engine_023` |
+| `core/audio/effects/effect_chain.h` | `EffectChain<N>`: ordered, fixed-capacity effect slots with `insert()` (Engine 023) | `engine_023` |
 
 ### Engine 019 — drum voice integration (implemented, host-side only)
 
@@ -141,6 +148,31 @@ voice count are independent (default 16 voices, like the manager's default).
 - Threading: direct synth calls are audio-thread only; synth `post*` from ONE
   producer thread (the same thread may also feed the drum queue).
 
+### Engine 023 — effects engine (implemented, host-side only)
+
+- Signal flow: `render()` = `mixSources()` (drums + synths, each × level) →
+  `applyEffects()` (the chain, in place on the summed bus) → `applyMaster()`
+  (× master, hard safety clip). Chain order: **EQ → Compressor → SoftClipper
+  → Distortion → Reverb**, reached via `pipeline.eq()`, `.compressor()`,
+  `.softClipper()`, `.distortion()`, `.reverb()`, `.effects()`.
+- **Every effect starts fully bypassed**, so existing renders are bit-exact.
+  Enable with `setEnabled(true)` / `setBypassed(false)` (20 ms crossfade;
+  `immediate = true` to skip it). A fully bypassed effect is not run at all.
+  An effect leaving full bypass is reset and its parameters (and mix) snap to
+  their set values.
+- All effects derive from `EffectBase<Derived>` (`Derived::tick(StereoFrame)`
+  per sample, in place). Shared: bypass, wet/dry `setMix` (exact at 0 and 1),
+  `reset()`. Parameter setters ignore NaN/inf and clamp; gains, frequencies,
+  thresholds and levels glide over 20 ms per sample (`SmoothedValue`).
+- **Tape (Engine 024) goes in via `pipeline.effects().insert(position, &tapeEffect)`**,
+  wrapping `TapeMachine` in an `AudioEffect`. Do not rewrite the chain or
+  duplicate `TapeMachine`'s compression/saturation.
+- Effect parameters are audio-thread only; there is no control queue yet.
+- Reverb delay storage is fixed (162,808 bytes in `double`, ~81 KB if ported
+  to float). The FM-1's RAM is undocumented; do not assume it fits.
+- Benchmark: `databreaks_engine_023_benchmark` (built, not a CTest test; host
+  numbers only).
+
 
 ## Hardware constraints and safety rules
 
@@ -167,7 +199,8 @@ voice count are independent (default 16 voices, like the manager's default).
 ## Layout
 
 ```
-core/audio/                 engine-wide types, mixers, tape, sampler, pads
+core/audio/                 engine-wide types, mixers, tape, sampler, pads, pipeline
+core/audio/effects/         EQ, compressor, soft clipper, distortion, reverb, chain
 instruments/synthesizers/   mono / FM / poly synths, ADSR
 tests/audio/engine_NNN.cpp  one program per engine milestone (render demo or assertion test)
 tests/audio/tape_*_test.cpp assertion tests for tape components
@@ -183,7 +216,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 27 tests
+ctest --test-dir build --output-on-failure          # all 29 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 
