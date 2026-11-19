@@ -64,8 +64,10 @@
 //
 // Host-side implementation; not validated on FM-1 hardware.
 
+#include "arrangement.h"
 #include "musical_clock.h"
 #include "pattern.h"
+#include "pattern_bank.h"
 #include "recorder.h"
 #include "../audio/spsc_ring.h"
 #include "../audio/synth_event.h"
@@ -89,6 +91,12 @@ struct SequencerEvent {
 
 enum class TransportCommandType : std::uint8_t { Start, Stop, Reset, SetTempo };
 
+// When a pattern switch requested while playing takes effect (Engine 028):
+// at the END of the current beat / bar / loop of the CURRENT pattern
+// (counted from that pattern's start), or at the next tick (Immediate).
+// While stopped every switch is immediate.
+enum class SwitchTiming : std::uint8_t { Immediate, NextBeat, NextBar, NextLoop };
+
 struct TransportCommand {
     TransportCommandType type = TransportCommandType::Start;
     std::int64_t milliBpm = 120000;  // SetTempo only
@@ -103,7 +111,11 @@ public:
     static constexpr std::size_t LiveCapacity = 256;      // usable: 255
     static constexpr std::int64_t Fine = MusicalClock::FinePerTick;
 
-    explicit Sequencer(int sampleRate = 48000) : clock_(sampleRate) {}
+    static constexpr std::size_t MaxTransitionsPerBlock = 64;
+
+    explicit Sequencer(int sampleRate = 48000) : clock_(sampleRate) {
+        bank_.store(0, pattern_, recorder_.track_, quantize_);  // pattern 0 is active
+    }
 
     MusicalClock& clock() { return clock_; }
     const MusicalClock& clock() const { return clock_; }
@@ -130,14 +142,19 @@ public:
 
     // Back to tick 0 (keeps play state); sounding notes are released, an
     // open recording pass is closed, and a new timeline epoch begins.
+    // Engine 028: the active pattern restarts at tick 0; a pending manual
+    // switch is cancelled; a running arrangement restarts at entry 0.
     void reset() {
         finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
         clock_.reset();
+        origin_ = 0;
         ++epoch_;
         if (recorder_.armed_) {
             recorder_.armFine_ = 0;
         }
         flushNotes_ = true;
+        pending_ = Pending{};
+        if (songActive_) beginSong();
     }
 
     bool playing() const { return clock_.playing(); }
@@ -149,7 +166,7 @@ public:
     // block); with a punch window, recording happens only inside it.
     void arm() {
         recorder_.armed_ = true;
-        recorder_.armFine_ = currentFine();
+        recorder_.armFine_ = std::max<std::int64_t>(0, currentFine() - origin_ * Fine);
         recorder_.openPass_ = 0;
     }
 
@@ -217,6 +234,187 @@ public:
     // Invalid commands rejected by the command queue (SetQuantize, SetPunch).
     std::uint64_t invalidCommandCount() const { return invalidCommands_; }
 
+    // ---- Pattern bank and switching (Engine 028; audio thread, or via
+    //      postCommand) -----------------------------------------------------
+    //
+    // The working pattern (pattern(), recorder().track(), quantizeSettings())
+    // IS the active bank slot; the bank's copy of that slot is refreshed
+    // whenever the sequencer switches away from it (or commitActivePattern()).
+
+    const DefaultPatternBank& bank() const { return bank_; }
+    const Arrangement& arrangement() const { return arrangement_; }
+    int activePattern() const { return activePattern_; }
+    std::int64_t patternOriginTick() const { return origin_; }
+    int pendingPattern() const {
+        return pending_.active && pending_.action == Pending::Switch ? pending_.target : -1;
+    }
+    std::int64_t pendingTransitionTick() const { return pending_.active ? pending_.tick : -1; }
+
+    // Requests a switch to pattern `id`. Stopped: immediate (the pattern
+    // starts at the current position). Playing: at the end of the current
+    // beat / bar / loop of the current pattern (the unit containing the next
+    // undelivered tick, so a unit that is about to start still plays
+    // completely), sample-exact; Immediate = the next undelivered tick. Several requests: the LAST one wins (it
+    // replaces any pending switch). Requesting the active pattern cancels a
+    // pending switch and does not restart the pattern. A manual request
+    // stops song mode. Returns false for an invalid id (or a rejected
+    // immediate switch, see bankFullCount()).
+    bool requestPatternSwitch(int id, SwitchTiming timing = SwitchTiming::NextLoop) {
+        if (!DefaultPatternBank::validId(id)) {
+            ++invalidCommands_;
+            return false;
+        }
+        songActive_ = false;
+        if (id == activePattern_) {
+            pending_ = Pending{};
+            return true;
+        }
+        if (!clock_.playing()) {
+            pending_ = Pending{};
+            return switchTo(id, clock_.firstTickAtOrAfter(clock_.samplePosition()));
+        }
+        pending_ = Pending{true, Pending::Switch, id, boundaryTick(timing), false, 0};
+        return true;
+    }
+
+    void cancelPatternSwitch() {
+        if (pending_.active && !pending_.song) pending_ = Pending{};
+    }
+
+    // Saves the working pattern into its bank slot (e.g. before saving to
+    // a file). False if the pools cannot hold it.
+    bool commitActivePattern() {
+        return bank_.store(activePattern_, pattern_, recorder_.track_, quantize_);
+    }
+
+    // Removes steps, notes, recording and undo history; keeps the shape and
+    // quantize settings. The active pattern is cleared in place.
+    bool clearPattern(int id) {
+        if (!DefaultPatternBank::validId(id)) return false;
+        if (id == activePattern_) {
+            finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
+            pattern_.clear();
+            recorder_.track_.clear();
+        }
+        return bank_.clearContents(id);
+    }
+
+    // dst := src, including recording, undo history, quantize and shape.
+    bool copyPattern(int src, int dst) {
+        if (!DefaultPatternBank::validId(src) || !DefaultPatternBank::validId(dst)) return false;
+        if (src == dst) return true;
+        if (src == activePattern_ && !commitActivePattern()) return false;
+        if (!bank_.copy(src, dst)) return false;
+        if (dst == activePattern_) reloadActive();
+        return true;
+    }
+
+    // Copies src into the lowest empty slot; returns the new id or -1.
+    int duplicatePattern(int src) {
+        if (!DefaultPatternBank::validId(src)) return -1;
+        if (src == activePattern_ && !commitActivePattern()) return -1;
+        return lastDuplicate_ = bank_.duplicate(src);
+    }
+    int lastDuplicateId() const { return lastDuplicate_; }
+
+    bool setPatternLength(int id, TimeSignature ts, int bars, std::int64_t stepTicks) {
+        if (!DefaultPatternBank::validId(id)) return false;
+        if (id == activePattern_) return pattern_.configure(ts, bars, stepTicks);
+        return bank_.setShape(id, ts, bars, stepTicks);
+    }
+
+    // Replaces a pattern's whole contents. Audio thread (a copy of ~310 KB
+    // when `id` is active); other threads use ReplacePattern with a
+    // PatternData.
+    bool replacePattern(int id, const Pattern& pattern, const RecordedTrack& track,
+                        const QuantizeSettings& quantize) {
+        if (!DefaultPatternBank::validId(id) || !quantize.valid()) return false;
+        if (id != activePattern_) return bank_.store(id, pattern, track, quantize);
+        finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
+        pattern_ = pattern;
+        recorder_.track_ = track;
+        quantize_ = quantize;
+        quantCacheValid_ = false;
+        return true;
+    }
+
+    // ---- Arrangement (Engine 028) ---------------------------------------------
+    // Editing is rejected while song mode runs.
+
+    bool arrangementClear() {
+        if (songActive_) return false;
+        arrangement_.clear();
+        return true;
+    }
+    bool arrangementAppend(int id, int repeats) {
+        if (songActive_ || !DefaultPatternBank::validId(id)) return false;
+        return arrangement_.append(id, repeats);
+    }
+    bool arrangementSetEnd(ArrangementEnd end) {
+        if (songActive_) return false;
+        arrangement_.setEnd(end);
+        return true;
+    }
+
+    // Validates the arrangement and starts song mode: stopped -> entry 0
+    // now; playing -> entry 0 at the current pattern's next loop boundary.
+    bool startArrangement() {
+        const bool ok = arrangement_.validate([this](int id) {
+            return id == activePattern_ || bank_.used(id);
+        });
+        if (!ok) {
+            ++invalidCommands_;
+            return false;
+        }
+        songActive_ = true;
+        songFinished_ = false;
+        if (!clock_.playing()) {
+            beginSong();
+        } else {
+            pending_ = Pending{true, Pending::Switch, arrangement_.at(0).pattern,
+                               boundaryTick(SwitchTiming::NextLoop), true, 0};
+        }
+        return songActive_;
+    }
+
+    void stopArrangement() {
+        songActive_ = false;
+        if (pending_.active && pending_.song) pending_ = Pending{};
+    }
+
+    bool songActive() const { return songActive_; }
+    bool songFinished() const { return songFinished_; }
+    std::size_t songEntry() const { return songEntry_; }
+
+    // Replaces bank, arrangement and active pattern (e.g. after loading a
+    // file). Only while stopped; false (unchanged) if playing, the active id
+    // is invalid or the arrangement does not validate against the bank.
+    bool loadBankState(const DefaultPatternBank& bank, const Arrangement& arrangement,
+                       int active) {
+        if (clock_.playing() || !DefaultPatternBank::validId(active)) return false;
+        if (!arrangement.empty() &&
+            !arrangement.validate([&bank](int id) { return bank.used(id); })) {
+            return false;
+        }
+        finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
+        bank_ = bank;
+        arrangement_ = arrangement;
+        activePattern_ = active;
+        bank_.load(active, pattern_, recorder_.track_, quantize_);
+        if (!bank_.used(active)) bank_.store(active, pattern_, recorder_.track_, quantize_);
+        origin_ = clock_.firstTickAtOrAfter(clock_.samplePosition());
+        ++epoch_;
+        quantCacheValid_ = false;
+        pending_ = Pending{};
+        songActive_ = false;
+        songFinished_ = false;
+        return true;
+    }
+
+    std::uint64_t patternSwitchCount() const { return switches_; }
+    std::uint64_t rejectedSwitchCount() const { return rejectedSwitches_; }
+    std::uint64_t bankFullCount() const { return bank_.fullCount(); }
+
     // Live input on the audio thread (same rules as postLive).
     bool liveEvent(const LiveEvent& event) { return recorder_.queueLive(event); }
 
@@ -255,9 +453,10 @@ public:
             flushNotes_ = false;
         }
 
+        std::int64_t advanceBy = static_cast<std::int64_t>(frames);
         if (frames > 0) {
             if (clock_.playing()) {
-                generate(static_cast<std::int64_t>(frames));
+                advanceBy = generateBlock(static_cast<std::int64_t>(frames));
             } else {
                 playLiveWhileStopped();
             }
@@ -275,7 +474,11 @@ public:
             sink(events_[i]);
         }
         delivered_ += count_;
-        clock_.advance(static_cast<std::int64_t>(frames));
+        clock_.advance(advanceBy);
+        if (stopAtBlockEnd_) {
+            clock_.stop();
+            stopAtBlockEnd_ = false;
+        }
     }
 
     // ---- Statistics (audio thread) ------------------------------------------------
@@ -306,20 +509,46 @@ private:
     static constexpr std::uint64_t LiveOrder = 1ull << 41;
     static constexpr std::int64_t MaxNoteLengthFine = Pattern::MaxNoteLengthTicks * Fine;
 
+    struct Pending {
+        enum Action : std::uint8_t { Switch, SongEnd, SongFinish };
+        bool active = false;
+        Action action = Switch;
+        int target = 0;
+        std::int64_t tick = 0;  // absolute tick of the transition
+        bool song = false;
+        std::size_t entry = 0;  // arrangement entry entered (song switches)
+    };
+
     MusicalClock clock_;
     Pattern pattern_;
     Recorder recorder_;
+    // Engine 028: bank, arrangement, switching.
+    DefaultPatternBank bank_;
+    Arrangement arrangement_;
+    int activePattern_ = 0;
+    std::int64_t origin_ = 0;  // absolute tick where the active pattern started
+    Pending pending_{};
+    bool songActive_ = false;
+    bool songFinished_ = false;
+    std::size_t songEntry_ = 0;
+    bool stopAtBlockEnd_ = false;
+    int lastDuplicate_ = -1;
+    std::uint64_t switches_ = 0;
+    std::uint64_t rejectedSwitches_ = 0;
     std::uint64_t seed_ = 1;
     std::uint32_t epoch_ = 0;
     SpscRing<TransportCommand, TransportCapacity> transport_;
     SpscRing<SequencerCommand, CommandCapacity> commands_;
     SpscRing<LiveEvent, LiveCapacity> live_;
 
-    // Worst case per block: MaxActiveNotes flushed note-offs, MaxEventsPerBlock
-    // triggers/note-ons, MaxActiveNotes note-offs ending inside the block,
+    // Worst case per block: MaxEventsPerBlock triggers/note-ons; one
+    // note-off per note that was sounding at the block start (<=
+    // MaxActiveNotes) or started in the block (<= MaxEventsPerBlock), which
+    // also covers flushes and segment ends of pattern switches (Engine 028);
     // and every pending live input.
-    std::array<SequencerEvent, MaxEventsPerBlock + 2 * MaxActiveNotes +
-                                   Recorder::MaxPendingLive> events_{};
+    static constexpr std::size_t EventBufferSize =
+        MaxEventsPerBlock + (MaxEventsPerBlock + MaxActiveNotes) + Recorder::MaxPendingLive;
+    std::array<SequencerEvent, EventBufferSize> events_{};
     std::size_t count_ = 0;
     std::size_t generated_ = 0;  // limited events this block
     std::uint64_t orderCounter_ = 0;
@@ -399,6 +628,10 @@ private:
             }
             ++generated_;
         }
+        if (count_ == events_.size()) {  // cannot happen (see EventBufferSize)
+            ++dropped_;
+            return false;
+        }
         if (e.order == 0) e.order = orderCounter_++;
         events_[count_++] = e;
         return true;
@@ -449,6 +682,55 @@ private:
             case SequencerCommandType::ConfigurePattern:
                 pattern_.configure(c.timeSignature, c.bars, c.stepTicks);
                 break;
+            case SequencerCommandType::SwitchPattern:
+                if (c.b < 0 || c.b > static_cast<std::int64_t>(SwitchTiming::NextLoop)) {
+                    ++invalidCommands_;
+                } else {
+                    requestPatternSwitch(static_cast<int>(c.a), static_cast<SwitchTiming>(c.b));
+                }
+                break;
+            case SequencerCommandType::CancelPatternSwitch: cancelPatternSwitch(); break;
+            case SequencerCommandType::ClearBankPattern:
+                if (!clearPattern(static_cast<int>(c.a))) ++invalidCommands_;
+                break;
+            case SequencerCommandType::CopyPattern:
+                if (!copyPattern(static_cast<int>(c.a), static_cast<int>(c.b))) ++invalidCommands_;
+                break;
+            case SequencerCommandType::DuplicatePattern:
+                if (duplicatePattern(static_cast<int>(c.a)) < 0) ++invalidCommands_;
+                break;
+            case SequencerCommandType::SetPatternLength:
+                if (!setPatternLength(static_cast<int>(c.a), c.timeSignature, c.bars, c.stepTicks)) {
+                    ++invalidCommands_;
+                }
+                break;
+            case SequencerCommandType::ReplacePattern:
+                if (c.data == nullptr) {
+                    ++invalidCommands_;
+                } else {
+                    const bool ok = replacePattern(static_cast<int>(c.a), c.data->pattern,
+                                                   c.data->track, c.data->quantize);
+                    if (!ok) ++invalidCommands_;
+                    c.data->status.store(ok ? 1 : -1, std::memory_order_release);
+                }
+                break;
+            case SequencerCommandType::ArrangementClear:
+                if (!arrangementClear()) ++invalidCommands_;
+                break;
+            case SequencerCommandType::ArrangementAppend:
+                if (!arrangementAppend(static_cast<int>(c.a), static_cast<int>(c.b))) {
+                    ++invalidCommands_;
+                }
+                break;
+            case SequencerCommandType::ArrangementSetEnd:
+                if (songActive_ || c.a < 0 || c.a > static_cast<std::int64_t>(ArrangementEnd::HoldLast)) {
+                    ++invalidCommands_;
+                } else {
+                    arrangementSetEnd(static_cast<ArrangementEnd>(c.a));
+                }
+                break;
+            case SequencerCommandType::StartArrangement: startArrangement(); break;
+            case SequencerCommandType::StopArrangement: stopArrangement(); break;
             }
         }
     }
@@ -481,8 +763,10 @@ private:
         }
     }
 
-    // Ends held recorded notes at `fine` and closes the open pass.
-    void finishRecordingAt(std::int64_t fine) {
+    // Ends held recorded notes at absolute fine position `absFine` and
+    // closes the open pass.
+    void finishRecordingAt(std::int64_t absFine) {
+        const std::int64_t fine = absFine - origin_ * Fine;
         Recorder& r = recorder_;
         for (std::size_t i = 0; i < r.heldCount_; ++i) {
             const std::int64_t len = std::clamp<std::int64_t>(
@@ -501,7 +785,7 @@ private:
         rec.velocity = e.velocity;
         rec.startFine = fine - loop * loopFine;
         rec.captureSample = e.sampleTime;
-        rec.captureFine = fine;
+        rec.captureFine = fine + origin_ * Fine;  // absolute
         rec.captureLoop = loop;
         rec.captureEpoch = epoch_;
         if (e.type == LiveEventType::DrumHit) {
@@ -549,6 +833,8 @@ private:
         Recorder& r = recorder_;
         std::size_t due = 0;
         while (due < r.pendingCount_ && r.pending_[due].event.sampleTime < s1) ++due;
+        // Late = before the block (not merely before this segment).
+        const std::int64_t lateBefore = blockStart_;
 
         // Record region inside this block: [a, b).
         std::int64_t a = f0;
@@ -556,10 +842,10 @@ private:
         if (r.armed_) {
             a = std::max(a, r.armFine_);
             if (r.punch_) {
-                a = std::max(a, r.punchIn_ * Fine);
-                b = std::min(b, r.punchOut_ * Fine);
+                a = std::max(a, (r.punchIn_ - origin_) * Fine);
+                b = std::min(b, (r.punchOut_ - origin_) * Fine);
             }
-            if (r.punch_ && r.openPass_ != 0 && r.punchOut_ * Fine <= f0) {
+            if (r.punch_ && r.openPass_ != 0 && (r.punchOut_ - origin_) * Fine <= f0) {
                 closePass();  // punch-out already passed
             }
         }
@@ -592,14 +878,14 @@ private:
 
         for (std::size_t i = 0; i < due; ++i) {
             const LiveEvent& e = r.pending_[i].event;
-            if (e.sampleTime < s0) {
+            if (e.sampleTime < lateBefore) {
                 // Late: sounds at offset 0 and is never recorded; a late
                 // note-off still ends a held recorded note (at f0).
                 ++r.late_;
-                if (e.type == LiveEventType::NoteOff) finishInput(e, clock_.fineAtSample(s0));
+                if (e.type == LiveEventType::NoteOff) finishInput(e, localFineAtSample(s0));
                 continue;
             }
-            const std::int64_t fine = clock_.fineAtSample(e.sampleTime);  // in [f0, f1)
+            const std::int64_t fine = localFineAtSample(e.sampleTime);  // in [f0, f1)
             advanceTo(fine);
             const bool inside = recording && fine >= pieceStart && fine < pieceEnd;
             if (e.type == LiveEventType::NoteOff) {
@@ -610,7 +896,7 @@ private:
         }
         advanceTo(b);  // remaining pieces of this block
 
-        if (recording && r.punch_ && r.punchOut_ * Fine <= f1) {
+        if (recording && r.punch_ && (r.punchOut_ - origin_) * Fine <= f1) {
             closePass();  // punch-out inside this block (exclusive end)
         }
         return due;
@@ -660,15 +946,180 @@ private:
         return static_cast<std::size_t>(s < 0 ? 0 : s);
     }
 
-    void generate(std::int64_t frames) {
+    // ---- Engine 028: switching helpers ------------------------------------------
+
+    std::int64_t blockStart_ = 0;
+
+    std::int64_t localFineAtSample(std::int64_t sample) const {
+        return clock_.fineAtSample(sample) - origin_ * Fine;
+    }
+
+    // End of the beat / bar / loop (of the current pattern, counted from its
+    // start) that contains the next undelivered tick: the unit that is
+    // playing - or about to start - always completes. Immediate: the next
+    // undelivered tick.
+    std::int64_t boundaryTick(SwitchTiming timing) const {
+        const std::int64_t next = clock_.firstTickAtOrAfter(clock_.samplePosition());
+        std::int64_t unit = 1;
+        switch (timing) {
+        case SwitchTiming::Immediate: return next;
+        case SwitchTiming::NextBeat: unit = pattern_.timeSignature().ticksPerBeat(); break;
+        case SwitchTiming::NextBar: unit = pattern_.timeSignature().ticksPerBar(); break;
+        case SwitchTiming::NextLoop: unit = pattern_.lengthTicks(); break;
+        }
+        const std::int64_t local = std::max<std::int64_t>(0, next - origin_);
+        return origin_ + (floorDiv(local, unit) + 1) * unit;
+    }
+
+    // Makes pattern `id` the active one, starting at absolute tick `tick`.
+    // Held recorded notes end there and the open pass closes (recording
+    // stays armed and continues in the new pattern). The working state is
+    // saved into its slot first; if the bank cannot hold it the switch is
+    // rejected and nothing changes. Sounding notes keep their note-offs.
+    bool switchTo(int id, std::int64_t tick) {
+        if (id == activePattern_) return true;
+        finishRecordingAt(tick * Fine);
+        if (!bank_.store(activePattern_, pattern_, recorder_.track_, quantize_)) {
+            ++rejectedSwitches_;
+            return false;
+        }
+        bank_.load(id, pattern_, recorder_.track_, quantize_);
+        if (!bank_.used(id)) bank_.store(id, pattern_, recorder_.track_, quantize_);
+        activePattern_ = id;
+        origin_ = tick;
+        ++epoch_;
+        quantCacheValid_ = false;
+        if (recorder_.armed_) recorder_.armFine_ = 0;
+        ++switches_;
+        return true;
+    }
+
+    // Reloads the working state from the active slot (after it was replaced
+    // in the bank).
+    void reloadActive() {
+        finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
+        bank_.load(activePattern_, pattern_, recorder_.track_, quantize_);
+        quantCacheValid_ = false;
+    }
+
+    // Song mode: enter entry 0 now (stopped, or after reset).
+    void beginSong() {
+        const std::int64_t tick = clock_.firstTickAtOrAfter(clock_.samplePosition());
+        enterEntry(0, tick);
+    }
+
+    void enterEntry(std::size_t entry, std::int64_t tick) {
+        if (!switchTo(arrangement_.at(entry).pattern, tick)) {
+            songActive_ = false;
+            pending_ = Pending{};
+            return;
+        }
+        songEntry_ = entry;
+        // A same-pattern entry continues the pattern: count its repeats
+        // from this boundary.
+        const std::int64_t end = tick + arrangement_.at(entry).repeats * pattern_.lengthTicks();
+        if (entry + 1 < arrangement_.size()) {
+            pending_ = Pending{true, Pending::Switch, arrangement_.at(entry + 1).pattern, end,
+                               true, entry + 1};
+            return;
+        }
+        switch (arrangement_.end()) {
+        case ArrangementEnd::Stop:
+            pending_ = Pending{true, Pending::SongEnd, 0, end, true, entry};
+            break;
+        case ArrangementEnd::Loop:
+            pending_ = Pending{true, Pending::Switch, arrangement_.at(0).pattern, end, true, 0};
+            break;
+        case ArrangementEnd::HoldLast:
+            pending_ = Pending{true, Pending::SongFinish, 0, end, true, entry};
+            break;
+        }
+    }
+
+    // Executes the pending transition at absolute tick `tick` (inside the
+    // current block). Returns false if generation must stop (song end).
+    bool executePending(std::int64_t tick, std::int64_t blockStart) {
+        const Pending p = pending_;
+        pending_ = Pending{};
+        if (p.action == Pending::Switch) {
+            if (p.song) {
+                if (songActive_) enterEntry(p.entry, tick);
+            } else {
+                switchTo(p.target, tick);
+            }
+            return true;
+        }
+        songActive_ = false;
+        songFinished_ = true;
+        if (p.action == Pending::SongFinish) return true;  // HoldLast: keep looping
+        // Stop: release everything at the end boundary; the transport
+        // stops exactly there.
+        finishRecordingAt(tick * Fine);
+        const std::size_t offset = offsetOfFine(tick * Fine, blockStart);
+        for (std::size_t i = 0; i < activeCount_; ++i) {
+            push({offset, SequencerEvent::Kind::NoteOff, active_[i].target, active_[i].note, 0, 0},
+                 true);
+        }
+        activeCount_ = 0;
+        stopAtBlockEnd_ = true;
+        return false;
+    }
+
+    // Live input due before `sEnd` sounds at its own sample (not recorded).
+    void playLiveRange(std::int64_t sEnd, std::int64_t blockStart) {
+        Recorder& r = recorder_;
+        std::size_t due = 0;
+        while (due < r.pendingCount_ && r.pending_[due].event.sampleTime < sEnd) ++due;
+        for (std::size_t i = 0; i < due; ++i) {
+            const std::int64_t offset = r.pending_[i].event.sampleTime - blockStart;
+            pushLive(r.pending_[i].event, static_cast<std::size_t>(offset < 0 ? 0 : offset),
+                     r.pending_[i].arrival);
+        }
+        removePending(due);
+    }
+
+    // Generates one block, split at every pending transition inside it, so
+    // switches happen on their exact sample for any block size. Returns the
+    // number of samples the clock should advance (less than `frames` only
+    // when an arrangement stopped inside the block).
+    std::int64_t generateBlock(std::int64_t frames) {
         const std::int64_t s0 = clock_.samplePosition();
         const std::int64_t s1 = s0 + frames;
-        const std::int64_t tFirst = clock_.firstTickAtOrAfter(s0);
-        const std::int64_t tEnd = clock_.firstTickAtOrAfter(s1);
-        const std::int64_t f0 = std::max<std::int64_t>(0, clock_.firstFineAtOrAfter(s0));
-        const std::int64_t f1 = clock_.firstFineAtOrAfter(s1);
-        // Ticks in [tFirst, tEnd) and fine positions in [f0, f1) are
-        // delivered inside this block.
+        blockStart_ = s0;
+        std::int64_t segS = s0;
+        std::int64_t segT = clock_.firstTickAtOrAfter(s0);
+        std::int64_t segF = std::max<std::int64_t>(0, clock_.firstFineAtOrAfter(s0));
+        const std::int64_t endT = clock_.firstTickAtOrAfter(s1);
+        const std::int64_t endF = clock_.firstFineAtOrAfter(s1);
+        for (std::size_t n = 0; n < MaxTransitionsPerBlock && pending_.active; ++n) {
+            if (pending_.tick >= endT) break;  // delivered in a later block
+            const std::int64_t t = std::max(pending_.tick, segT);
+            const std::int64_t sT = clock_.sampleOfTick(t);
+            generateRange(segS, sT, segT, t, segF, t * Fine, s0);
+            segS = sT;
+            segT = t;
+            segF = t * Fine;
+            if (!executePending(t, s0)) {
+                playLiveRange(s1, s0);
+                return sT - s0;
+            }
+        }
+        generateRange(segS, s1, segT, endT, segF, endF, s0);
+        return frames;
+    }
+
+    // Events for samples [sA, sB), ticks [tA, tB) and fine positions
+    // [fA, fB) (all absolute) of the active pattern, whose tick 0 is
+    // origin_. Offsets are relative to blockStart.
+    void generateRange(std::int64_t sA, std::int64_t sB, std::int64_t tA, std::int64_t tB,
+                       std::int64_t fA, std::int64_t fB, std::int64_t blockStart) {
+        if (sB <= sA && tB <= tA && fB <= fA) return;
+        const std::int64_t originFine = origin_ * Fine;
+        // Local (pattern-relative) positions; nothing exists before tick 0.
+        const std::int64_t tFirst = std::max<std::int64_t>(0, tA - origin_);
+        const std::int64_t tEnd = tB - origin_;
+        const std::int64_t f0 = std::max<std::int64_t>(0, fA - originFine);
+        const std::int64_t f1 = fB - originFine;
 
         const std::int64_t length = pattern_.lengthTicks();
         const std::int64_t loopFine = length * Fine;
@@ -677,7 +1128,7 @@ private:
         const std::int64_t maxMicro = stepTicks / 2;
 
         // a. Recorder (before playback, so Replace erasure takes effect now).
-        const std::size_t due = recordBlock(s0, s1, f0, f1, loopFine);
+        const std::size_t due = recordBlock(sA, sB, f0, f1, loopFine);
 
         if (tEnd > tFirst) {
             // b. Pattern drum steps.
@@ -701,8 +1152,9 @@ private:
                             ++skipped_;
                             continue;
                         }
-                        push({offsetOfFine(tick * Fine, s0), SequencerEvent::Kind::Drum,
-                              SynthTarget::Mono, static_cast<int>(pad), st.velocity, 0},
+                        push({offsetOfFine((tick + origin_) * Fine, blockStart),
+                              SequencerEvent::Kind::Drum, SynthTarget::Mono,
+                              static_cast<int>(pad), st.velocity, 0},
                              false);
                     }
                 }
@@ -725,11 +1177,13 @@ private:
                         ++dropped_;
                         continue;
                     }
-                    if (!push({offsetOfFine(tick * Fine, s0), SequencerEvent::Kind::NoteOn,
-                               n.target, n.note, n.velocity, 0}, false)) {
+                    if (!push({offsetOfFine((tick + origin_) * Fine, blockStart),
+                               SequencerEvent::Kind::NoteOn, n.target, n.note, n.velocity, 0},
+                              false)) {
                         continue;
                     }
-                    active_[activeCount_++] = {n.target, n.note, (tick + n.lengthTicks) * Fine};
+                    active_[activeCount_++] = {n.target, n.note,
+                                               (tick + origin_ + n.lengthTicks) * Fine};
                 }
             }
         }
@@ -755,21 +1209,25 @@ private:
                     if (fine < f0 || fine >= f1) continue;
                     const std::uint64_t order = RecordedOrder + e.sequence;
                     if (e.kind == RecordedEvent::Kind::Drum) {
-                        push({offsetOfFine(fine, s0), SequencerEvent::Kind::Drum,
-                              SynthTarget::Mono, e.value, e.velocity, order}, false);
+                        push({offsetOfFine(fine + originFine, blockStart),
+                              SequencerEvent::Kind::Drum, SynthTarget::Mono, e.value,
+                              e.velocity, order},
+                             false);
                         continue;
                     }
                     if (activeCount_ == MaxActiveNotes) {
                         ++dropped_;
                         continue;
                     }
-                    if (!push({offsetOfFine(fine, s0), SequencerEvent::Kind::NoteOn,
-                               e.target, e.value, e.velocity, order}, false)) {
+                    if (!push({offsetOfFine(fine + originFine, blockStart),
+                               SequencerEvent::Kind::NoteOn, e.target, e.value, e.velocity,
+                               order},
+                              false)) {
                         continue;
                     }
                     active_[activeCount_++] = {
                         e.target, e.value,
-                        fine + e.lengthFine + (quant ? quantLength_[i] : 0)};
+                        fine + originFine + e.lengthFine + (quant ? quantLength_[i] : 0)};
                 }
             }
         }
@@ -777,18 +1235,20 @@ private:
         // d. Live inputs sound at their own samples (late ones at offset 0).
         for (std::size_t i = 0; i < due; ++i) {
             const LiveEvent& e = recorder_.pending_[i].event;
-            const std::int64_t offset = e.sampleTime - s0;
+            const std::int64_t offset = e.sampleTime - blockStart;
             pushLive(e, static_cast<std::size_t>(offset < 0 ? 0 : offset),
                      recorder_.pending_[i].arrival);
         }
         removePending(due);
 
-        // Note-offs due in this block (including notes started above).
+        // Note-offs due in this range (absolute; including notes started
+        // above and notes of a pattern switched away from).
         std::size_t i = 0;
         while (i < activeCount_) {
-            if (active_[i].offFine < f1) {
-                push({offsetOfFine(active_[i].offFine, s0), SequencerEvent::Kind::NoteOff,
-                      active_[i].target, active_[i].note, 0, 0}, true);
+            if (active_[i].offFine < fB) {
+                push({offsetOfFine(active_[i].offFine, blockStart),
+                      SequencerEvent::Kind::NoteOff, active_[i].target, active_[i].note, 0, 0},
+                     true);
                 active_[i] = active_[--activeCount_];
             } else {
                 ++i;

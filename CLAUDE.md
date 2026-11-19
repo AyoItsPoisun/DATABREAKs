@@ -15,7 +15,7 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–027).
+019–028).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -23,7 +23,7 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 027
+### Components through Engine 028
 
 | Header | Purpose | Tested by |
 |---|---|---|
@@ -47,10 +47,13 @@ flashable FM-1 firmware.
 | `core/audio/synth_event.h` | `SynthTarget`, `SynthEventType`, `SynthEvent` — moved unchanged out of `audio_pipeline.h` in Engine 025 (the pipeline includes it) | — |
 | `core/sequencer/musical_time.h` | 960 PPQ ticks, `TimeSignature`, bar/beat/tick conversion (Engine 025) | `engine_025` |
 | `core/sequencer/musical_clock.h` | `MusicalClock`: exact tick↔sample mapping in 128-bit integers, milli-BPM tempo, start/stop/reset (Engine 025); fine ticks (1/1024 tick) and `fineAtSample` for recording timestamps (Engine 026) | `engine_025`, `engine_026` |
-| `core/sequencer/pattern.h` | `Pattern`: 27 drum lanes × up to 256 steps (velocity, probability, microtiming) + up to 512 synth `NoteEvent`s (Engine 025) | `engine_025` |
-| `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025). Engine 026: records live input, plays the recorded track and live input, SPSC command and live-input queues. Engine 027: quantized playback of the recorded track (settings + 16 KB derived cache) | `engine_025` (38 checks), `engine_026` (55 checks), `engine_027` (30 checks) |
+| `core/sequencer/pattern.h` | `Pattern`: 27 drum lanes × up to 256 steps (velocity, probability, microtiming) + up to 512 synth `NoteEvent`s (Engine 025); `restoreStep`/`restoreNote` for exact restore (Engine 028) | `engine_025`, `engine_028` |
+| `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025). Engine 026: records live input, plays the recorded track and live input, SPSC command and live-input queues. Engine 027: quantized playback of the recorded track (settings + 16 KB derived cache). Engine 028: pattern bank, pattern origin, sample-exact switching, song mode, bank/arrangement commands | `engine_025` (38 checks), `engine_026` (55 checks), `engine_027` (30 checks), `engine_028` (33 checks) |
+| `core/sequencer/pattern_bank.h` | `PatternBank<Banks, PerBank, StepPool, NotePool, EventPool>`: compact shared-pool storage of complete pattern states; `DefaultPatternBank` (2×8 patterns, 200,480 B); `PatternData` (Engine 028) | `engine_028` |
+| `core/sequencer/arrangement.h` | `Arrangement`: up to 64 `{pattern, repeats}` entries + end mode Stop/Loop/HoldLast (Engine 028) | `engine_028` |
+| `core/sequencer/pattern_io.h` | "DBPB" v1 save/load: explicit little-endian fields, CRC-32, full validation; not real-time (Engine 028) | `engine_028` |
 | `core/sequencer/quantize.h` | `QuantizeGrid`, `QuantizeSettings`, integer quantizer: nearest grid point, strength, swing, selection, note-off option (Engine 027) | `engine_027` |
-| `core/sequencer/recorded_track.h` | `RecordedEvent` (raw fine-tick timing, capture sample/loop/epoch), `RecordedTrack`: 2,048 events, 512 per pass, 16-pass undo/redo by pass activity (Engine 026); `revision()` counter (Engine 027) | `engine_026`, `engine_027` |
+| `core/sequencer/recorded_track.h` | `RecordedEvent` (raw fine-tick timing, capture sample/loop/epoch), `RecordedTrack`: 2,048 events, 512 per pass, 16-pass undo/redo by pass activity (Engine 026); `revision()` counter (Engine 027); pass-table export and validated `restore`/`restoreFrom` (Engine 028) | `engine_026`, `engine_027`, `engine_028` |
 | `core/sequencer/recorder.h` | `LiveEvent`, `RecordMode` (Free/Loop), `WriteMode` (Overdub/Replace), `SequencerCommand`, `Recorder` settings/state/limits (Engine 026) | `engine_026` |
 | `core/audio/spsc_ring.h` | `SpscRing<T, N>`: the fixed-capacity lock-free single-producer/single-consumer ring, generalised from Engine 020's queue in Engine 022 (drum and synth events) | `engine_020`, `engine_022` (two-thread tests) |
 | `core/audio/effects/audio_effect.h` | `AudioEffect` interface + `EffectBase<Derived>` (bypass with 20 ms crossfade, wet/dry, reset), `SmoothedValue`, dB helpers (Engine 023) | `engine_023` |
@@ -311,6 +314,52 @@ voice count are independent (default 16 voices, like the manager's default).
 - Full details: `docs/PROGRESS_REPORT.md` §14. Benchmark:
   `databreaks_engine_027_benchmark` (built, not a CTest test).
 
+### Engine 028 — pattern banks, switching and arrangement (implemented, host-side only)
+
+- **Storage:** the sequencer keeps ONE full working set (the active
+  pattern: `pattern()`, `recorder().track()`, `quantizeSettings()`). All
+  patterns live compactly in `bank()` (`DefaultPatternBank`: 16 slots,
+  shared pools of 8,192 sparse steps, 1,024 notes, 2,048 packed events;
+  200,480 B). Never give each pattern its own `Pattern` + `RecordedTrack`
+  (~310 KB each). The bank's copy of the active slot is refreshed on every
+  switch away and by `commitActivePattern()`.
+- **IDs:** stable, `bank × 8 + slot`, 0..15. Every operation validates and
+  either fully succeeds or changes nothing; full pools are counted
+  (`bankFullCount`) and never corrupt other slots.
+- **Switching:** `requestPatternSwitch(id, SwitchTiming)`. Stopped →
+  immediate. Playing → at the END of the current beat / bar / loop of the
+  current pattern (or the next tick for Immediate). Last request wins;
+  requesting the active pattern cancels. A block is split at the transition
+  tick, so switches are sample-exact for any block size. The new pattern's
+  tick 0 is the transition tick (`patternOriginTick()`); a new epoch starts;
+  held recorded notes end there; sounding notes end on their own note-offs.
+  If the working pattern cannot be saved, the switch is rejected
+  (`rejectedSwitchCount`).
+- **Per pattern:** steps, notes, raw recording, undo/redo history,
+  quantize settings, length/time signature. Tempo and the probability seed
+  are global.
+- **Arrangement:** up to 64 `{pattern, repeats 1–999}`, end Stop (transport
+  stops on the exact end sample) / Loop / HoldLast; validated at
+  `startArrangement()`; editing rejected while song mode runs; a manual
+  switch stops it; `reset()` restarts it.
+- **Commands:** `SwitchPattern`, `CancelPatternSwitch`, `ClearBankPattern`,
+  `CopyPattern`, `DuplicatePattern`, `SetPatternLength`, `ReplacePattern`
+  (`PatternData*`, sender-owned until `status` != 0), `Arrangement*`,
+  `Start/StopArrangement` via `postCommand()`. Audio path: 0 allocations and
+  0 mutex locks (`engine_028` C3 counts `pthread_mutex_lock`).
+- **Persistence:** `pattern_io::save/load` ("DBPB" v1, documented field by
+  field in `pattern_io.h`, CRC-32, strict validation, all-or-nothing). NOT
+  real-time: save/load outside the audio callback; `loadBankState()` only
+  while stopped. Never write C++ structs as raw bytes.
+- **Never put an `AudioPipeline` (919,840 B) or `Sequencer` (655,264 B) on
+  the stack**: use static or heap storage (ASan overflowed the 8 MB stack
+  with ten pipelines in `engine_021`, now heap-allocated).
+- `Sequencer` is now 655,264 bytes (+225,936). The per-block event buffer
+  was enlarged to 2,816 entries because block splitting raised the
+  note-off bound; `push()` refuses anything beyond it.
+- Full details: `docs/PROGRESS_REPORT.md` §15. Benchmark:
+  `databreaks_engine_028_benchmark` (built, not a CTest test).
+
 ## Hardware constraints and safety rules
 
 - **Unknown and must not be assumed:** the FM-1's MCU/SoC, GPIO mappings,
@@ -338,7 +387,8 @@ voice count are independent (default 16 voices, like the manager's default).
 ```
 core/audio/                 engine-wide types, mixers, tape, sampler, pads, pipeline
 core/audio/effects/         EQ, compressor, soft clipper, tape, distortion, reverb, chain
-core/sequencer/             musical time, clock, pattern, sequencer (025), recorder (026), quantize (027)
+core/sequencer/             musical time, clock, pattern, sequencer (025), recorder (026), quantize (027),
+                            pattern bank, arrangement, persistence (028)
 instruments/synthesizers/   mono / FM / poly synths, ADSR
 tests/audio/engine_NNN.cpp  one program per engine milestone (render demo or assertion test)
 tests/audio/tape_*_test.cpp assertion tests for tape components
@@ -354,7 +404,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 37 tests
+ctest --test-dir build --output-on-failure          # all 39 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 

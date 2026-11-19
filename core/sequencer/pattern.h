@@ -22,7 +22,7 @@
 // values are rejected (the call returns false / -1 and changes nothing).
 //
 // Threading: edit on the audio thread, or while the sequencer is stopped
-// (cross-thread editing is Engine 026 work).
+// (other threads use Sequencer::postCommand, Engine 026).
 
 #include "musical_time.h"
 #include "../audio/synth_event.h"
@@ -179,6 +179,29 @@ public:
     void clear() {
         clearDrums();
         clearNotes();
+    }
+
+    // ---- Exact restore (Engine 028: pattern bank / persistence) --------------------
+    //
+    // Unlike setStep/addNote these only check bounds and capacity, not the
+    // current shape, because a pattern may legitimately hold steps beyond
+    // its step count or notes beyond its length (configure() keeps them).
+    // Used to restore a pattern exactly as it was saved.
+
+    bool restoreStep(std::size_t pad, std::size_t step, const DrumStep& value) {
+        if (pad >= Lanes || step >= MaxSteps) {
+            return false;
+        }
+        steps_[pad][step] = value;
+        return true;
+    }
+
+    bool restoreNote(const NoteEvent& note) {
+        if (noteCount_ == MaxNotes) {
+            return false;
+        }
+        notes_[noteCount_++] = note;
+        return true;
     }
 
     // ---- Validation ---------------------------------------------------------------

@@ -244,6 +244,85 @@ public:
         return n;
     }
 
+    // ---- Exact save / restore (Engine 028) ---------------------------------
+
+    struct PassState {
+        std::uint32_t id = 0;
+        bool active = true;
+    };
+
+    std::size_t passCount() const { return passCount_; }
+    PassState pass(std::size_t i) const { return {passes_[i].id, passes_[i].active}; }
+    std::uint32_t nextPassId() const { return nextPassId_; }
+
+    // Replaces the whole contents (events, passes, pass-id counter) with the
+    // given data, after validating it; returns false and changes nothing if
+    // it is inconsistent: too many events/passes, pass ids zero, duplicated
+    // or >= nextPassId, events referring to unknown passes, more than
+    // MaxEventsPerPass events in one pass, an invalid event field. Statistics
+    // counters are not part of the contents and are kept.
+    bool restore(const RecordedEvent* events, std::size_t eventCount,
+                 const PassState* passes, std::size_t passCount, std::uint32_t nextPassId) {
+        return restoreFrom(eventCount, [events](std::size_t i) { return events[i]; }, passes,
+                           passCount, nextPassId);
+    }
+
+    // Same, reading event i through get(i) (twice: validate, then copy), so
+    // packed storage can be restored without an intermediate buffer.
+    template <typename Get>
+    bool restoreFrom(std::size_t eventCount, Get get, const PassState* passes,
+                     std::size_t passCount, std::uint32_t nextPassId) {
+        if (eventCount > MaxEvents || passCount > MaxPasses || nextPassId == 0) return false;
+        std::array<std::size_t, MaxPasses> perPass{};
+        for (std::size_t i = 0; i < passCount; ++i) {
+            if (passes[i].id == 0 || passes[i].id >= nextPassId) return false;
+            for (std::size_t k = 0; k < i; ++k) {
+                if (passes[k].id == passes[i].id) return false;
+            }
+        }
+        auto indexOf = [&](std::uint32_t id) -> int {
+            for (std::size_t k = 0; k < passCount; ++k) {
+                if (passes[k].id == id) return static_cast<int>(k);
+            }
+            return -1;
+        };
+        for (std::size_t i = 0; i < eventCount; ++i) {
+            const RecordedEvent e = get(i);
+            if (!validEvent(e)) return false;
+            if (e.createdPass != 0) {
+                const int k = indexOf(e.createdPass);
+                if (k < 0 || ++perPass[static_cast<std::size_t>(k)] > MaxEventsPerPass) return false;
+            }
+            if (e.erasedPass != 0 && indexOf(e.erasedPass) < 0) return false;
+        }
+        for (std::size_t i = 0; i < eventCount; ++i) events_[i] = get(i);
+        count_ = eventCount;
+        for (std::size_t i = 0; i < passCount; ++i) {
+            passes_[i] = {passes[i].id, passes[i].active, perPass[i]};
+        }
+        passCount_ = passCount;
+        nextPassId_ = nextPassId;
+        markDirty();
+        return true;
+    }
+
+    // Field ranges of a stored event (used by restore and by loaders).
+    static bool validEvent(const RecordedEvent& e) {
+        if (e.kind == RecordedEvent::Kind::Drum) {
+            if (e.value < 0 || e.value > 26 || e.pending || e.lengthFine != 0) return false;
+        } else if (e.kind == RecordedEvent::Kind::Note) {
+            if (e.value < 0 || e.value > 127) return false;
+            if (e.target != SynthTarget::Mono && e.target != SynthTarget::Fm &&
+                e.target != SynthTarget::Poly) {
+                return false;
+            }
+            if (e.lengthFine < 0 || (!e.pending && e.lengthFine < 1)) return false;
+        } else {
+            return false;
+        }
+        return e.velocity >= 1 && e.velocity <= 127 && e.startFine >= 0 && e.captureSample >= 0;
+    }
+
     // Increases on every change to the stored events or pass states
     // (Engine 027: lets derived caches know when to refresh).
     std::uint64_t revision() const { return revision_; }

@@ -61,6 +61,8 @@ struct LiveEvent {
     std::int64_t sampleTime = 0;             // absolute clock sample
 };
 
+struct PatternData;  // pattern_bank.h (Engine 028)
+
 enum class RecordMode : std::uint8_t { Free, Loop };
 enum class WriteMode : std::uint8_t { Overdub, Replace };
 
@@ -69,7 +71,20 @@ enum class SequencerCommandType : std::uint8_t {
     Arm, Disarm, SetRecordMode, SetWriteMode, SetTargets, SetPunch, ClearPunch,
     Undo, Redo, ClearRecording,
     SetQuantize,  // Engine 027
-    SetStep, ClearStep, AddNote, RemoveNote, ClearPattern, ConfigurePattern
+    SetStep, ClearStep, AddNote, RemoveNote, ClearPattern, ConfigurePattern,
+    // Engine 028: pattern bank, switching and arrangement.
+    SwitchPattern,        // a = pattern id, b = SwitchTiming
+    CancelPatternSwitch,
+    ClearBankPattern,     // a = pattern id
+    CopyPattern,          // a = source id, b = destination id
+    DuplicatePattern,     // a = source id (result: Sequencer::lastDuplicateId())
+    SetPatternLength,     // a = pattern id, timeSignature, bars, stepTicks
+    ReplacePattern,       // a = pattern id, data (status reported in data)
+    ArrangementClear,
+    ArrangementAppend,    // a = pattern id, b = repeats
+    ArrangementSetEnd,    // a = ArrangementEnd
+    StartArrangement,
+    StopArrangement
 };
 
 struct SequencerCommand {
@@ -85,6 +100,8 @@ struct SequencerCommand {
     int bars = 1;
     std::int64_t stepTicks = 240;
     QuantizeSettings quantize{};  // SetQuantize (Engine 027)
+    PatternData* data = nullptr;  // ReplacePattern (Engine 028): owned by
+                                  // the sender until data->status != 0
 };
 
 class Recorder {

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <memory>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -102,7 +103,8 @@ void routing() {
 
     // 1
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kA);
         p.drums().trigger(0, 127);
         const auto out = render(p, 4);
@@ -116,7 +118,8 @@ void routing() {
 
     // 2
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kLeftQuarter);
         p.drums().assignSample(1, &kRightHalf);
         p.drums().assignSample(26, &kEighth);
@@ -130,7 +133,8 @@ void routing() {
 
     // 3
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.setDrumLevel(0.7);
         p.setMasterLevel(0.9);
         p.drums().assignSample(0, &kLeftOne);
@@ -150,7 +154,8 @@ void routing() {
 
     // 4
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kA);
         p.drums().trigger(0, 127);
         p.setDrumLevel(0.5);
@@ -168,7 +173,8 @@ void routing() {
 
     // 5
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kA);
         p.drums().trigger(0, 127);
         p.setMasterLevel(0.5);
@@ -184,7 +190,8 @@ void routing() {
 
     // Gain staging including velocity.
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kLeftOne);
         p.drums().setVolume(0, 0.8);
         p.drums().setVelocitySensitivity(0, 1.0);
@@ -198,7 +205,8 @@ void routing() {
 
     // 6
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kA);
         p.drums().trigger(0, 127);
         p.setDrumLevel(0.5);
@@ -211,7 +219,8 @@ void routing() {
         p.mixSources(raw.data(), 2);
         const bool unmastered = near(raw[0].left, 0.1 + 0.25) &&
                                 near(raw[0].right, -0.1 + 0.125);
-        Pipeline idle;
+        auto idleStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& idle = *idleStorage;
         std::vector<StereoFrame> keep(2, StereoFrame{0.3, -0.2});
         idle.render(keep.data(), 2);
         check(mastered && unmastered && near(keep[1].left, 0.3) &&
@@ -221,7 +230,8 @@ void routing() {
 
     // Clipping only when the mix exceeds full scale, symmetric per channel.
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         p.drums().assignSample(0, &kA);
         p.drums().trigger(0, 127);
         render(p, 64);
@@ -238,7 +248,8 @@ void routing() {
 
     // Invalid input
     {
-        Pipeline p;
+        auto pStorage = std::make_unique<Pipeline>();  // ~0.9 MB: not on the stack
+        Pipeline& p = *pStorage;
         std::vector<StereoFrame> bad(2, StereoFrame{
             std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::infinity()});

@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-19 for Engine 027 on branch `claude/engine-019-prep-transfer`.
-Engine 027 starts from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-19 for Engine 028 on branch `claude/engine-019-prep-transfer`.
+Engine 028 starts from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -19,11 +19,12 @@ History of this report:
 - **`3bdd248`:** updated for Engine 024 (tape in the effects chain).
 - **`f94fcef`:** updated for Engine 025 (sequencer foundation).
 - **`7712644`:** updated for Engine 026 (recording and performance capture).
-- **Engine 027 commit:** updated for Engine 027 (non-destructive quantization).
+- **`2c6c2bd`:** updated for Engine 027 (non-destructive quantization).
+- **Engine 028 commit:** updated for Engine 028 (pattern banks, switching and arrangement foundation).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 027**:
+The repository contains host-side C++17 prototypes through **Engine 028**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -39,7 +40,8 @@ The repository contains host-side C++17 prototypes through **Engine 027**:
 - tape in the effects chain (024): the existing `TapeMachine` runs as a chain effect (`TapeEffect`) between the soft clipper and distortion, with all twelve tape controls;
 - a sequencer foundation (025): an exact musical clock, 27-pad drum and synth-note patterns, and sample-accurate scheduling into the existing instruments, identical for any block size;
 - performance recording (026): free and loop recording of drum hits and synth notes (musical events, not audio) with overdub, replace, punch in/out and 16-step undo/redo. Raw timing is kept at 1/1024-tick resolution and replays on the captured sample. Cross-thread control uses lock-free command and live-input queues;
-- **non-destructive quantization** (027): grid (whole to 1/64), strength 0–100 %, swing, per-kind and per-pad selection and optional note-off quantization, applied at playback from the untouched raw recording.
+- non-destructive quantization (027): grid (whole to 1/64), strength 0–100 %, swing, per-kind and per-pad selection and optional note-off quantization, applied at playback from the untouched raw recording;
+- **pattern banks and an arrangement foundation** (028): 16 compactly stored patterns with their own recordings, undo history and quantize settings, sample-exact switching at beat/bar/loop boundaries, a song chain with repeats and end modes, and a versioned, checksummed save format.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -52,15 +54,35 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–027 have been run only on a
+pad scanning, storage or boot code. Engines 019–028 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 027 commit
+### 2.1 Engine 028 commit
 
-Same environment as §2.8.
+Same environment as §2.9.
+
+| Check | Result |
+|---|---|
+| Default build | 46 executables (39 registered tests + the Engine 020, 023–028 benchmarks), **0 warnings** |
+| `ctest --test-dir build --output-on-failure` | **39/39 pass** (the 37 existing tests plus `engine_028` and `render_engine_028_render`) |
+| `-L unit` / `-L render` | **21/21** / **18/18 pass** |
+| `engine_028` | **33/33 checks**. `engine_027` 30, `engine_026` 55, `engine_025` 38 and all earlier tests: passing and unchanged |
+| Release `-O3 -DNDEBUG` | **0 warnings, 39/39 pass** |
+| ASan + UBSan (Debug) | **39/39 pass**, no reports, after moving `engine_021`'s ten stack pipelines to the heap (ASan stack overflow from the larger pipeline; §15.6) |
+| ThreadSanitizer | Engines 020–028, no reports |
+| Allocation / locks | `engine_028` C3: 0 allocations and 0 mutex locks on the audio path (positive control included); earlier checks still pass |
+| Existing renders | The 16 reference WAVs are byte-identical to `e54db9b`'s; the Engine 021 demo matches the committed WAV; the Engine 022–027 demos match their own renders |
+| New demo | `databreaks_engine_028_demo.wav`: valid, bit-identical for blocks 1/64/256/1000/4096 (§15.9) |
+| Mutation spot checks | 13 deliberate defects, all caught (§15.8) |
+| `git diff --check` | Clean |
+| Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
+
+### 2.2 Engine 027 commit (`2c6c2bd`)
+
+Same environment as §2.9.
 
 | Check | Result |
 |---|---|
@@ -78,9 +100,9 @@ Same environment as §2.8.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.2 Engine 026 commit (`7712644`)
+### 2.3 Engine 026 commit (`7712644`)
 
-Same environment as §2.8.
+Same environment as §2.9.
 
 | Check | Result |
 |---|---|
@@ -98,9 +120,9 @@ Same environment as §2.8.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.3 Engine 025 commit (`f94fcef`)
+### 2.4 Engine 025 commit (`f94fcef`)
 
-Same environment as §2.8.
+Same environment as §2.9.
 
 | Check | Result |
 |---|---|
@@ -117,9 +139,9 @@ Same environment as §2.8.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.4 Engine 024 commit (`3bdd248`)
+### 2.5 Engine 024 commit (`3bdd248`)
 
-Same environment as §2.8.
+Same environment as §2.9.
 
 | Check | Result |
 |---|---|
@@ -137,9 +159,9 @@ Same environment as §2.8.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.5 Engine 023 commit (`7a1ced6`)
+### 2.6 Engine 023 commit (`7a1ced6`)
 
-Same environment as §2.8.
+Same environment as §2.9.
 
 | Check | Result |
 |---|---|
@@ -157,9 +179,9 @@ Same environment as §2.8.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.6 Engine 022 commit (`d326959`)
+### 2.7 Engine 022 commit (`d326959`)
 
-Same environment as §2.8.
+Same environment as §2.9.
 
 | Check | Result |
 |---|---|
@@ -176,7 +198,7 @@ Same environment as §2.8.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.7 Engine 021 commit (`100a8e1`)
+### 2.8 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -195,7 +217,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.8 Engine 020 commit (`dfd3164`)
+### 2.9 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -215,7 +237,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.9 Engine 019 commit (`ce44e70`, for reference)
+### 2.10 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -236,10 +258,10 @@ WAVs byte-identical to `e54db9b`.
 | `DrumEngine<N, E>` | 019, 020 | Working prototype, tested | See §6 and §7 |
 | `DrumEventQueue<N>` | 020 | Working prototype, tested | Lock-free single-producer/single-consumer ring; see §7.4 |
 | `AudioPipeline<V, E, S>` | 021–025 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths → effects chain → master, driven by the sequencer; see §8–§12 |
-| Sequencer (`core/sequencer/`) | 025–027 | Working prototype, tested | Musical clock, patterns, sample-accurate scheduling (§12); performance recording, command and live-input queues (§13); non-destructive quantization (§14) |
+| Sequencer (`core/sequencer/`) | 025–028 | Working prototype, tested | Musical clock, patterns, sample-accurate scheduling (§12); performance recording, command and live-input queues (§13); non-destructive quantization (§14); pattern bank, switching, arrangement, persistence (§15) |
 | Effects (`core/audio/effects/`) | 023, 024 | Working prototype, tested | EQ, compressor, soft clipper, tape (`TapeEffect`, 024), distortion, reverb, `EffectChain`; see §10 and §11 |
 | `SpscRing<T, N>` | 020, 022 | Working prototype, tested | Generalised drum queue; carries drum and synth events |
-| MIDI byte input, committing recordings to pattern steps, pattern banks, effect automation, tape transport as a source | — | Not started | Live input enters through `Sequencer::postLive` (Engine 026); new sources go into `AudioPipeline::mixSources` |
+| MIDI byte input, committing recordings to pattern steps, a storage layer for saved banks, effect automation, tape transport as a source | — | Not started | Live input enters through `Sequencer::postLive` (Engine 026); new sources go into `AudioPipeline::mixSources` |
 | Firmware (HAL, drivers, display, pads, storage, boot) | — | Not started | Depends on hardware facts that are not yet documented |
 
 ## 4. DSP findings (synth/envelope code, carried over unchanged)
@@ -2227,9 +2249,284 @@ RAM budgets are unverified.
 - Memory: +18 KB per sequencer; FM-1 RAM is undocumented.
 - Nothing has been listened to, and nothing has been run on an FM-1.
 
-## 15. Recommended next steps (in order)
+## 15. Engine 028: pattern banks, switching and arrangement foundation
 
-1. Review Engines 019–027 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–027 demo renders.
+Files:
+
+- new:
+  - `core/sequencer/pattern_bank.h`: `PatternBank<Banks, PerBank, StepPool, NotePool, EventPool>`, `DefaultPatternBank`, `PatternData`;
+  - `core/sequencer/arrangement.h`: `Arrangement`, `ArrangementEntry`, `ArrangementEnd`;
+  - `core/sequencer/pattern_io.h`: the "DBPB" v1 file format (save/load);
+  - tests: `tests/audio/engine_028.cpp` (`unit`), `tests/audio/engine_028_render.cpp` (`render`), `tests/audio/engine_028_benchmark.cpp` (built, not a test);
+- changed:
+  - `core/sequencer/sequencer.h`: bank, pattern origin, switching, song mode, block splitting at transitions, new commands, a larger event buffer;
+  - `core/sequencer/recorder.h`: new `SequencerCommandType`s and a `PatternData*` command field;
+  - `core/sequencer/pattern.h`: `restoreStep` / `restoreNote` (exact restore, additions only);
+  - `tests/audio/engine_021.cpp`: pipelines in `routing()` moved from the stack to the heap (see §15.6);
+  - `core/sequencer/recorded_track.h`: pass-table export and validated `restore` / `restoreFrom` (additions only);
+  - `CMakeLists.txt`.
+
+The Engine 025 clock and scheduling rules, the Engine 026 recorder and the
+Engine 027 quantizer are unchanged. With one pattern and no switching,
+output is identical to Engine 027: all reference renders, including the
+Engine 022–027 demos, are byte-identical.
+
+### 15.1 Storage design and memory
+
+**What it would cost to multiply the working set.** A complete working pattern is about 310 KB:
+
+| Part | Size |
+|---|---|
+| `Pattern` | 127,024 B |
+| `RecordedTrack` | 182,584 B |
+| `QuantizeSettings` | 24 B |
+
+Sixteen of them would be **4,953,728 bytes**.
+
+**Chosen design.** The sequencer keeps exactly one working set: the active pattern, using the unchanged Engine 025–027 code. The bank stores all patterns compactly in **shared, fixed pools**:
+
+| Pool | Record | Capacity | Bytes |
+|---|---|---|---|
+| Drum steps (sparse: only steps that differ from `DrumStep{}`) | 8 B | 8,192 (more than one fully dense 27 × 256 pattern) | 65,536 |
+| Notes | 16 B | 1,024 | 16,384 |
+| Recorded events (every field, exact; `captureLoop` checked to fit 32 bits) | 56 B (vs 88 B in `RecordedTrack`) | 2,048 (one full Engine 026 track) | 114,688 |
+| Slot metadata (shape, quantize, pool ranges, 16-entry pass table) | 242 B per slot | 16 slots | 3,872 |
+| **`DefaultPatternBank` total** | | | **200,480** |
+
+- **Capacity:** 16 patterns, as 2 banks × 8. IDs are stable: id = bank × 8 + slot.
+- **Sizing:** a typical one-bar pattern needs a few KB; the pools, not the slot count, limit the total. Larger or smaller banks are a template-parameter change.
+- **Per pattern in the bank:** 8 B per non-default step + 16 B per note + 56 B per recorded event. The 242 B of slot metadata is fixed per slot, whether the slot is used or not.
+  - Typical pattern (96 steps, 8 notes, 64 recorded events): 4,480 B.
+  - Heavy pattern (1,728 steps, 128 notes, 500 events): 43,872 B.
+
+**Totals, and nothing hidden:**
+
+| Item | Engine 027 | Engine 028 |
+|---|---|---|
+| Working set (`Pattern` + `RecordedTrack`) | 309,608 B | 309,608 B (unchanged) |
+| Bank | — | 200,480 B |
+| Arrangement | — | 272 B (64 entries × 4 B + header) |
+| Event buffer (per-block events, see §15.6) | 65,536 B | 90,112 B (+24,576) |
+| `SequencerCommand` | 120 B | 128 B (+8 for the `PatternData*`) |
+| **`Sequencer`** | **429,328 B** | **655,264 B (+225,936, +53 %)** |
+| **`AudioPipeline<16>`** | **693,904 B** | **919,840 B (+32.6 %)** |
+
+FM-1 RAM is undocumented. The pools are template parameters, so the bank can
+be shrunk or grown without code changes.
+
+**Store and load:**
+- **store():** checks capacity first, then frees the slot's old ranges (compacting each pool, O(pool size), bounded), then appends. A store that does not fit is rejected and counted, and the slot keeps its previous contents.
+- **load():** unpacks straight into the working `Pattern` and `RecordedTrack` (`restoreStep`, `restoreNote`, `restoreFrom`) without an intermediate buffer.
+- **Exact round trip:** shape, every non-default step (including steps beyond the step count and notes beyond the length, which `configure()` keeps), every note, every recorded-event field, the pass table with undo/redo state and the next pass id, and the quantize settings all come back exactly (K2).
+
+### 15.2 Bank operations
+
+| Operation | Behaviour |
+|---|---|
+| lookup | `validId`, `used`, `info` (shape, quantize, counts), `idOf(bank, slot)`, `bankOf`, `slotOf` |
+| empty pattern | an empty slot loads as 4/4, 1 bar, 16th steps, no data, quantize off; selecting it marks it used |
+| clear (`clearPattern`) | removes steps, notes, recording and undo history; keeps shape and quantize |
+| copy (`copyPattern`) | dst := src exactly, including recording, undo history, quantize and shape; src == dst is a no-op |
+| duplicate (`duplicatePattern`) | copy into the lowest empty slot; −1 (counted) when no slot is free or the pools are full |
+| replace (`replacePattern`, `ReplacePattern` command with `PatternData`) | whole contents from a prepared state |
+| set length (`setPatternLength`) | `Pattern::configure` rules (data kept) |
+| full storage | the operation fails, is counted (`bankFullCount`) and changes nothing |
+
+Every operation validates ids and values first (K4). The active pattern is
+edited in place (the working set) and the bank's copy is refreshed when it
+is switched away from or committed (`commitActivePattern`).
+
+### 15.3 Switching
+
+- **Stopped:** immediate. The new pattern starts at the current position.
+- **Playing:** `SwitchTiming::NextBeat`, `NextBar` or `NextLoop` switch at the **end of the current beat / bar / loop of the current pattern**, counted from its start. This is the unit containing the next undelivered tick, so a unit that is about to start still plays completely. `Immediate` switches at the next undelivered tick (the block start, so it depends on the block size).
+- **Sample-exact:** a block containing a transition is **split at the transition tick**. The old pattern generates up to it and the new one from it, so the switch is exact for any block size (W2, D1, D2).
+- **Several requests:** the **last** one replaces any pending switch. Requesting the **active** pattern cancels a pending switch and does not restart the pattern. `cancelPatternSwitch()` cancels explicitly. A manual request stops song mode.
+- **At the switch:**
+  - the working set is saved into its slot and the target loaded;
+  - the new pattern's tick 0 is the transition tick (the **pattern origin**), so patterns of any length or time signature start at their beginning;
+  - a new timeline epoch starts;
+  - recorded notes held at the switch end there, and the open pass closes; recording stays armed and continues in the new pattern;
+  - sequenced notes still sounding end on their own note-offs (no stuck notes, W5).
+- **Bank full:** if the working pattern cannot be saved (pools full), the switch is **rejected** and counted (`rejectedSwitchCount`). The current pattern and its recording keep playing intact (C4).
+- **Reset:** `reset()` restarts the active pattern at tick 0, cancels a pending manual switch and restarts a running arrangement at entry 0.
+
+### 15.4 Independent pattern state
+
+Each pattern keeps its own drum steps, notes, raw recorded timing,
+recording undo/redo history, quantize grid/strength/swing/selection, and
+length/time signature/step size (I1–I3). Tempo and the probability seed
+are global to the sequencer.
+
+**Undo/redo semantics are preserved per pattern:** undo acts on the active
+pattern's history only, and switching back restores a pattern's history
+exactly, including undone (redo-able) passes (I2, E2).
+
+### 15.5 Arrangement (song foundation)
+
+- An `Arrangement` holds up to 64 entries `{pattern id, repeats 1–999}` and an end mode. It is 272 bytes.
+- `startArrangement()` validates it: at least one entry, every id valid and stored, repeats in range; otherwise it is rejected and counted.
+  - Stopped: entry 0 starts now.
+  - Playing: entry 0 starts at the current pattern's next loop boundary.
+- Each entry plays its pattern for `repeats` whole loops. The transition to the next entry is exactly on the loop boundary after the last repeat (block splitting as above).
+- Consecutive entries with the same pattern continue it (no reload).
+- **End:**
+  - `Stop`: note-offs at the end boundary, and the transport stops **exactly on the end sample**: the clock is left there, and the rest of that block is not advanced.
+  - `Loop`: back to entry 0.
+  - `HoldLast`: the last pattern keeps looping and `songFinished()` is true.
+- Editing is rejected while song mode runs. `stopArrangement()` leaves the current pattern looping. A manual switch also stops song mode.
+- Up to 64 transitions per block are executed; with the shortest possible loop (120 ticks) there are at most about 4 per 4,096-frame block.
+
+### 15.6 Threading and real-time safety
+
+- Everything is owned by the audio thread.
+- Other threads use the existing command queue (63 entries, one producer). New command types:
+  - `SwitchPattern`, `CancelPatternSwitch`;
+  - `ClearBankPattern`, `CopyPattern`, `DuplicatePattern` (result: `lastDuplicateId()`), `SetPatternLength`;
+  - `ReplacePattern` (a `PatternData*` that the sender owns until `status` becomes 1 or −1);
+  - `ArrangementClear`, `ArrangementAppend`, `ArrangementSetEnd`, `StartArrangement`, `StopArrangement`.
+
+  Invalid ones are counted in `invalidCommandCount()`.
+- No mutex, no allocation (C3). `engine_028` interposes `pthread_mutex_lock` (which `std::mutex` uses), with a positive control showing the counter sees a real `std::mutex`. Recording, switching, copying, duplicating, clearing, replacing, running an arrangement and undoing take **0 locks and 0 allocations**. Under ASan/TSan, which intercept the same symbol, only the allocation count runs.
+- **Event buffer bound (corrected).** Splitting a block at transitions meant each segment could release up to 256 note-offs, which breaks Engine 025's bound of 1,024 + 2 × 256 + 512.
+  - Every note-off belongs to a note either sounding at the block start (≤ 256) or started in the block (≤ 1,024). The buffer is now 1,024 + 1,280 + 512 = 2,816 entries (+24,576 bytes).
+  - `push()` also refuses (and counts) anything beyond the buffer, so an out-of-bounds write is impossible even if the reasoning were wrong.
+- **Not real-time:** persistence (§15.7) and the `PatternData` preparation run outside the audio callback.
+
+**Stack size: one earlier test file changed.** `AudioPipeline<16>` is now 919,840 bytes. `engine_021`'s `routing()` declares ten pipelines in separate scopes. A normal build reuses that stack space, but ASan's use-after-scope instrumentation gives each its own slot (about 9 MB), which overflowed the 8 MB stack under ASan only.
+- Those ten pipelines are now heap-allocated (`std::make_unique`). The same objects and the **same assertions**; no check was changed or weakened.
+- `engine_021`'s allocation check (11) uses a `static` pipeline and is unaffected.
+- Rule (CLAUDE.md): do not put an `AudioPipeline` or `Sequencer` on the stack; use static or heap storage. On a target it would be static.
+
+### 15.7 Persistence: "DBPB" version 1
+
+This is an explicit, little-endian field encoding (`pattern_io.h` documents
+every field); no C++ struct is written as memory.
+
+```
+header   "DBPB" u16 version=1 u16 flags=0 u32 writerCapacity u32 recordCount
+records  u8[4] tag, u32 length, payload
+  PATN   one per stored pattern: id, shape, quantize, nextPassId, counts, then
+         steps (7 B), notes (13 B), passes (5 B), events (65 B)
+  ARNG   exactly one: end mode, entries (u16 pattern, u16 repeats)
+  ACTV   exactly one: active pattern id
+trailer  u32 CRC-32 (IEEE) of everything before it
+```
+
+- **Size:** a pattern record is 42 + 7·steps + 13·notes + 5·passes + 65·events bytes. Measured:
+  - empty default bank: 84 B;
+  - 16 typical patterns + arrangement: 79,834 B (~4.99 KB per pattern);
+  - 4 heavy patterns: 185,286 B;
+  - the test bank: 746 B.
+- **Loading** validates, in order: size, magic, version and flags (`UnsupportedVersion`), CRC, record framing (known tags, exact lengths, record count, no duplicate records or ids), every field range, step uniqueness, recording consistency (`RecordedTrack::restore`: pass ids, references, per-pass limits), the arrangement against the loaded patterns, the active id, and bank capacity (`CapacityExceeded`).
+- Loading parses into a staged bank and only on success copies it to the destination: **on any failure nothing changes**.
+- **Into a sequencer:** `Sequencer::loadBankState()` (stopped only). **Saving:** `commitActivePattern()` then `pattern_io::save(bank(), arrangement(), activePattern(), bytes)`.
+- Saving is deterministic, and save → load → save reproduces identical bytes.
+
+### 15.8 Tests: `tests/audio/engine_028.cpp`, 33 checks, all passing
+
+| Area | Checks |
+|---|---|
+| Bank | K1 ids and lookup; K2 exact store/load of a rich state; K3 copy/duplicate and a full bank; K4 invalid ids/shapes/settings; K5 pool overflow keeps every slot intact; K6 400 random store/copy/erase/clear operations against a reference model |
+| Switching | W1 stopped (immediate); W2 NextLoop at the loop boundary for blocks 1..4096; W3 NextBeat/NextBar/NextLoop (72,000/96,000/192,000) and Immediate (49,175); W4 last request wins, active-pattern request cancels, cancel; W5 a note sounding at the switch; W6 another length and time signature |
+| Independence | I1 own recordings, quantize and length, a held note ended at the switch; I2 undo per pattern; I3 away-and-back is exact |
+| Editing | E1 copy, duplicate, clear, set length, replace (active and stored); E2 undo history travels with a copy |
+| Arrangement | A1 A×2, B, A, C, end Stop: exact transitions and stop sample for blocks 1..4096; A2 Loop and HoldLast; A3 same-pattern entries continue, start while playing; A4 validation and edit locking; A5 reset restarts the song |
+| Persistence | F1 deterministic; F2 exact round trip, identical re-save; F3 loaded bank plays the arrangement identically, loading while playing rejected; F4 every truncation and single-byte corruption, magic, version, flags, CRC, tag, length, count, id, shape, quantize and step values rejected with the destination unchanged; F5 duplicate id, unstored active pattern, arrangement on an empty slot, unknown pass, capacity exceeded |
+| Commands / RT | C1 every new command through the queue, invalid ones counted, `ReplacePattern` status, overflow; C2 commands from a second thread (TSan); C3 0 allocations and 0 mutex locks (positive control); C4 bank full rejects a switch, nothing lost |
+| Block size | D1, D2: recording, quantize, NextBar/NextBeat switches and an arrangement ending in Stop give identical events for blocks 1..4096 at 120 and 123.456 BPM |
+
+Engines 025–027 (38 + 55 + 30 checks) and all earlier tests pass unchanged.
+
+**Mutation checks** (each made temporarily in a scratch copy, Release build):
+
+| Class | Mutation | Caught by |
+|---|---|---|
+| pattern corruption | pool compaction does not fix other slots' offsets | K5, K6, A1, A2, A5, F3, D1, D2 |
+| pattern corruption | step probability not stored | K2, K3, K5, K6, E1, E2, F4 |
+| lost undo state | pass table not stored | K2, K3, K5, K6, I1–I3, E1, E2, F2–F5 |
+| wrong switching | boundary one unit late | W2–W6, I1–I3, A3, C4 |
+| wrong switching | segment split one sample late | A1 |
+| wrong switching | first request wins | W4 |
+| wrong switching | arrangement repeats off by one | A1, A2, A3, A5 |
+| lost recording data | recording cleared on switch | I1, I2, C4, D1, D2 |
+| lost pattern data | quantize settings not stored | K2, K3, K5, K6, I1, E1, E2, F4 |
+| serialization | microTicks written in the wrong format | F5 |
+| serialization | CRC not checked | F4 |
+| serialization | FM/poly target codes swapped on save | F2, F3 |
+| serialization | step velocity 0 accepted | F4 |
+
+`firstwins` and `target` survived the first version of the tests. W4's
+requests were changed to (2, 1), and FM/poly notes and recordings were added
+to the persistence content.
+
+### 15.9 Render demonstration: `render_engine_028_render`
+
+Four patterns at 118 BPM:
+
+| Pattern | Contents |
+|---|---|
+| A | 2 bars, drums and mono bass |
+| B | 2 bars: a groove whose hi-hats were **recorded loosely through the recorder** in a pre-roll (not in the output), played back with 16th, 100 %, swing-50 quantization, plus FM stabs |
+| C | a 1-bar 7/8 tom/snare fill |
+| D | a duplicate of A plus one open hat |
+
+- Arrangement: A×2, B×2, C, D, end Stop. That is 3 transitions; A is already active.
+- Blocks 1, 64, 256, 1000 and 4096 are bit-identical.
+- The transport stops exactly on the end boundary (sample 1,061,695). 32 hats were recorded into B.
+- 249 events delivered, 0 dropped, 0 undelivered. Peak 0.622 (−4.1 dBFS), 0 clipped.
+- Output: `databreaks_engine_028_demo.wav`, 23.6 s with 1.5 s of tail, 48 kHz, 16-bit stereo, **not committed**.
+- MD5 `8ddc88d117c766b7040a3a8ac33d45d4`, identical in the default, Release and ASan builds.
+
+It is a software render, not an FM-1 recording, and nobody has listened to it.
+
+### 15.10 Benchmark (host only: 4-vCPU Xeon @ 2.1 GHz virtual machine, GCC 13.3, Release `-O3`)
+
+| Audio thread | Mean | Worst |
+|---|---|---|
+| Block (256 frames) with a switch, typical patterns, 16 in the bank | 22.3 µs | 121 µs |
+| Block with a switch, heavy patterns (1,728 steps, 500 events) | 45.7 µs | 683 µs (VM noise included) |
+| Same blocks without a switch | 0.2 / 1.0 µs | — |
+| Song with 120-tick loops (1.4 transitions per 4,096-frame block) | 28.9 µs | 82.7 µs |
+
+A 256-frame block lasts 5,333 µs, so a switch costs about 0.4–0.9 % of it on
+average on this host. The cost is the save of the outgoing pattern (a scan
+of all 6,912 step slots plus pool compaction) and the load of the incoming
+one.
+
+| Bank operation (typical patterns, 12 of 16 slots used) | Per call |
+|---|---|
+| lookup (`validId` + `used` + `info`) | < 0.01 µs |
+| store | 12.4 µs |
+| load | 6.7 µs |
+| copy | 0.22 µs |
+| duplicate + erase | 0.20 µs |
+| clear + re-store | 12.9 µs |
+
+| Serialisation (not real-time) | Size | Save | Load |
+|---|---|---|---|
+| 16 typical patterns + arrangement | 79,834 B | 1.0 ms | 1.5 ms |
+| 4 heavy patterns + arrangement | 185,286 B | 2.3 ms | 2.4 ms |
+
+All audio-thread rows: 0 allocations. These are host numbers; FM-1 CPU and
+RAM budgets are unverified.
+
+### 15.11 Limitations and remaining work
+
+- 16 patterns and the pool sizes are compile-time choices. There are no pattern names, colours or metadata.
+- A switch saves the complete outgoing pattern. On a slow CPU, a "dirty" flag could skip unchanged patterns.
+- `Immediate` while playing switches at the block start (block-size dependent), like all other commands. Beat/bar/loop switches are exact.
+- A transition that lands in the same block as a newly queued request is evaluated from the block start.
+- Tempo and the probability seed are global, not per pattern. There are no per-entry tempo changes, mutes or transposition in the arrangement, and no song position/locate, count-in or chaining shortcuts.
+- Changing a pattern's length while it is pending in an arrangement does not reschedule a transition already computed.
+- Persistence is a byte buffer: the host does the file I/O, and there is no storage layer for the FM-1. Loading into a sequencer requires the transport to be stopped. Engine statistics and recorder settings are not saved. Version 1 rejects unknown records (there is no forward-compatible skip yet).
+- `pattern_io::load` allocates about 0.5 MB of temporary storage (a staged bank and one `PatternData`). That is fine on a host, but a target port needs a streaming loader.
+- Memory: +226 KB per sequencer; FM-1 RAM is undocumented.
+- Nothing has been listened to, and nothing has been run on an FM-1.
+
+## 16. Recommended next steps (in order)
+
+1. Review Engines 019–028 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–028 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
 4. ~~Engine 024: tape processor as an `AudioEffect` inserted into the chain.~~ Done (§11). Possible follow-ups:
@@ -2249,15 +2546,20 @@ RAM budgets are unverified.
    - triplet/dotted grids, grid offset, groove templates;
    - per-region selection and undoable quantize settings;
    - an incremental cache refresh if the FM-1 budget needs it.
-8. Later sequencer candidates (§12.8, §13.9):
-   - pattern banks and chaining with switching at loop boundaries;
+8. ~~Engine 028: pattern banks, switching and arrangement foundation~~ (§15). Follow-ups (§15.11):
+   - per-pattern tempo / arrangement-entry tempo, mutes and transposition;
+   - song position, locate and count-in;
+   - a dirty flag so unchanged patterns are not re-saved on every switch;
+   - a forward-compatible (skippable) record scheme and a streaming loader for a target;
+   - a storage layer (host files now; FM-1 storage once documented).
+   Later sequencer candidates (§12.8, §13.9):
    - automation lanes;
    - locate/count-in/metronome;
    - an indexed recorded-track playback if the FM-1 budget needs it.
 9. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
 10. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
 
-## 16. Change log on this branch
+## 17. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -2338,3 +2640,13 @@ RAM budgets are unverified.
   - updated `CLAUDE.md` and this report.
 
   No earlier test was changed. The recorded data model, Engine 025 clock and scheduling, Engine 026 recording and undo, and synth, drum, effect, tape, sampler and mixer code were not changed. Engine 003 was not touched.
+- **Engine 028 commit:**
+  - added `core/sequencer/pattern_bank.h`, `core/sequencer/arrangement.h`, `core/sequencer/pattern_io.h`, `tests/audio/engine_028.cpp`, `tests/audio/engine_028_render.cpp` and `tests/audio/engine_028_benchmark.cpp`;
+  - `core/sequencer/sequencer.h`: bank, pattern origin, switching, song mode, block splitting, new commands, event buffer bound;
+  - `core/sequencer/recorder.h`: new command types and the `PatternData*` field;
+  - `core/sequencer/pattern.h`, `core/sequencer/recorded_track.h`: exact-restore additions;
+  - `tests/audio/engine_021.cpp`: the ten pipelines in `routing()` are heap-allocated (ASan stack overflow; assertions unchanged, §15.6);
+  - `CMakeLists.txt`: three targets, Threads + dl for `engine_028`, the warning loop, one `unit` and one `render` test entry;
+  - updated `CLAUDE.md` and this report.
+
+  No earlier check was changed or weakened. Clock, scheduling, recording and quantization rules, and synth, drum, effect, tape, sampler and mixer code were not changed. Engine 003 was not touched.

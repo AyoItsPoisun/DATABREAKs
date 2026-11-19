@@ -45,6 +45,8 @@ add_executable(databreaks_engine_026 tests/audio/engine_026.cpp)
 add_executable(databreaks_engine_026_render tests/audio/engine_026_render.cpp)
 add_executable(databreaks_engine_027 tests/audio/engine_027.cpp)
 add_executable(databreaks_engine_027_render tests/audio/engine_027_render.cpp)
+add_executable(databreaks_engine_028 tests/audio/engine_028.cpp)
+add_executable(databreaks_engine_028_render tests/audio/engine_028_render.cpp)
 
 # Engine 023 host benchmark: reports measurements only; not a CTest test.
 add_executable(databreaks_engine_023_benchmark
@@ -71,6 +73,11 @@ add_executable(databreaks_engine_027_benchmark
     tests/audio/engine_027_benchmark.cpp
 )
 
+# Engine 028 host benchmark: reports measurements only; not a CTest test.
+add_executable(databreaks_engine_028_benchmark
+    tests/audio/engine_028_benchmark.cpp
+)
+
 # Engine 020 host benchmark: reports measurements only; not a CTest test.
 add_executable(databreaks_engine_020_benchmark
     tests/audio/engine_020_benchmark.cpp
@@ -82,6 +89,8 @@ target_link_libraries(databreaks_engine_020 PRIVATE Threads::Threads)
 target_link_libraries(databreaks_engine_022 PRIVATE Threads::Threads)
 target_link_libraries(databreaks_engine_025 PRIVATE Threads::Threads)
 target_link_libraries(databreaks_engine_026 PRIVATE Threads::Threads)
+# engine_028 also interposes pthread_mutex_lock (dlsym) to count locks.
+target_link_libraries(databreaks_engine_028 PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 
 # Assertion-based host unit tests for the synth/DSP headers.
 add_executable(databreaks_dsp_unit_tests tests/unit/dsp_unit_tests.cpp)
@@ -138,6 +147,9 @@ foreach(target
     databreaks_engine_027
     databreaks_engine_027_render
     databreaks_engine_027_benchmark
+    databreaks_engine_028
+    databreaks_engine_028_render
+    databreaks_engine_028_benchmark
     databreaks_dsp_unit_tests
     databreaks_tape_test
     databreaks_transport_test
@@ -181,6 +193,7 @@ foreach(name
     engine_025
     engine_026
     engine_027
+    engine_028
     tape_test
     transport_test
     tape_character_test
@@ -207,6 +220,7 @@ foreach(name
     engine_025_render
     engine_026_render
     engine_027_render
+    engine_028_render
 )
     add_test(NAME render_${name} COMMAND databreaks_${name})
     set_tests_properties(render_${name} PROPERTIES LABELS render)
