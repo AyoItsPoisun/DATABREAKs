@@ -17,7 +17,11 @@ namespace databreaks {
 //
 // Engine 019 added slot-addressed control (triggerInSlot, releaseVoice,
 // stopVoice and per-slot queries) so that a higher layer can own voices and
-// fade them out. The original API (trigger, processBlock, stopAll,
+// fade them out. Engine 020 added queued ("pending") triggers: queueInSlot
+// fades out the slot's current sound and starts the queued sound on the
+// frame right after the fade ends, so a full pool can be stolen from without
+// a click and without exceeding VoiceCount. Every started or queued sound
+// gets a unique, never-reused sound id. The original API (trigger, processBlock, stopAll,
 // activeVoiceCount, capacity) behaves exactly as before: a voice that is never
 // released is mixed with a gain of exactly 1.0.
 //
@@ -48,6 +52,20 @@ public:
         // Incremented every time this slot starts a new sound, so stale
         // references to an earlier sound in the same slot can be detected.
         std::uint32_t generation = 0;
+
+        // Engine 020: unique id of the sound in this slot (0 = none).
+        std::uint64_t soundId = 0;
+
+        // Engine 020: sound waiting for this slot's fade to finish.
+        struct Pending {
+            const std::vector<StereoFrame>* sample = nullptr;
+            std::size_t startFrame = 0;
+            std::size_t endFrame = 0;
+            double volume = 1.0;
+            double rate = 1.0;
+            bool reverse = false;
+            std::uint64_t soundId = 0;  // 0 = nothing pending
+        } pending;
     };
 
     bool trigger(const std::vector<StereoFrame>* sample,
@@ -100,6 +118,69 @@ public:
                           volume, rate, reverse);
     }
 
+    // Engine 020: start a sound in `slot` without cutting what is there.
+    //
+    // * Slot idle: the sound starts immediately (like triggerInSlot).
+    // * Slot busy: its current sound starts (or speeds up) a linear fade of
+    //   at most fadeFrames frames, and the new sound starts on the frame
+    //   after that fade ends (or after the old sound ends by itself, if that
+    //   is sooner). A sound already queued on this slot is replaced.
+    //
+    // Returns the new sound's id, or 0 if the slot or request is invalid.
+    std::uint64_t queueInSlot(std::size_t slot,
+                              std::size_t fadeFrames,
+                              const std::vector<StereoFrame>* sample,
+                              std::size_t startFrame = 0,
+                              std::size_t endFrame = 0,
+                              double volume = 1.0,
+                              double rate = 1.0,
+                              bool reverse = false) {
+        if (slot >= VoiceCount ||
+            !validRequest(sample, startFrame, endFrame)) {
+            return 0;
+        }
+
+        if (!isVoiceActive(slot)) {
+            return startVoice(slot, sample, startFrame, endFrame,
+                              volume, rate, reverse)
+                ? voices[slot].soundId
+                : 0;
+        }
+
+        releaseVoice(slot, std::max<std::size_t>(fadeFrames, 1));
+
+        typename Voice::Pending& pending = voices[slot].pending;
+        pending.sample = sample;
+        pending.startFrame = startFrame;
+        pending.endFrame = endFrame;
+        pending.volume = volume;
+        pending.rate = rate;
+        pending.reverse = reverse;
+        pending.soundId = ++soundCounter;
+        return pending.soundId;
+    }
+
+    // Engine 020: drop a queued sound without touching the slot's current
+    // sound (which keeps fading).
+    void cancelPending(std::size_t slot) {
+        if (slot < VoiceCount) {
+            voices[slot].pending = {};
+        }
+    }
+
+    bool hasPending(std::size_t slot) const {
+        return slot < VoiceCount && voices[slot].pending.soundId != 0;
+    }
+
+    std::uint64_t pendingSoundId(std::size_t slot) const {
+        return slot < VoiceCount ? voices[slot].pending.soundId : 0;
+    }
+
+    // Id of the sound currently in the slot (0 if never used).
+    std::uint64_t voiceSoundId(std::size_t slot) const {
+        return slot < VoiceCount ? voices[slot].soundId : 0;
+    }
+
     // Engine 019: begin a linear fade to silence lasting fadeFrames frames
     // from the voice's current gain. A fadeFrames of 0 stops immediately.
     //
@@ -130,18 +211,15 @@ public:
         return true;
     }
 
-    // Engine 019: stop one voice immediately (no fade).
+    // Engine 019: stop one voice immediately (no fade). Also discards a
+    // sound queued on the slot (Engine 020).
     void stopVoice(std::size_t slot) {
         if (slot >= VoiceCount) {
             return;
         }
 
-        Voice& voice = voices[slot];
-        voice.player.stop();
-        voice.active = false;
-        voice.releasing = false;
-        voice.releaseStep = 0.0;
-        voice.releaseGain = 1.0;
+        silenceVoice(voices[slot]);
+        voices[slot].pending = {};
     }
 
     void processBlock(StereoFrame* output,
@@ -179,22 +257,26 @@ public:
                 left += rendered.left * gain;
                 right += rendered.right * gain;
 
+                bool finished = !voice.player.isPlaying();
+
                 if (voice.releasing) {
                     voice.releaseGain -= voice.releaseStep;
 
                     // Tolerance absorbs floating-point residue after the
                     // final step of the ramp.
                     if (voice.releaseGain <= 1e-12) {
-                        stopVoice(i);
-                        continue;
+                        finished = true;
                     }
                 }
 
-                if (!voice.player.isPlaying()) {
-                    voice.active = false;
-                    voice.releasing = false;
-                    voice.releaseStep = 0.0;
-                    voice.releaseGain = 1.0;
+                if (finished) {
+                    silenceVoice(voice);
+
+                    // A queued sound takes over the slot and renders from
+                    // the next frame on.
+                    if (voice.pending.soundId != 0) {
+                        startPending(i);
+                    }
                 }
             }
 
@@ -254,6 +336,23 @@ public:
 private:
     std::array<Voice, VoiceCount> voices{};
     unsigned long voiceCounter = 0;
+    std::uint64_t soundCounter = 0;
+
+    static void silenceVoice(Voice& voice) {
+        voice.player.stop();
+        voice.active = false;
+        voice.releasing = false;
+        voice.releaseStep = 0.0;
+        voice.releaseGain = 1.0;
+    }
+
+    void startPending(std::size_t slot) {
+        const typename Voice::Pending pending = voices[slot].pending;
+        voices[slot].pending = {};
+        startVoice(slot, pending.sample, pending.startFrame,
+                   pending.endFrame, pending.volume, pending.rate,
+                   pending.reverse, pending.soundId);
+    }
 
     static bool validRequest(const std::vector<StereoFrame>* sample,
                              std::size_t startFrame,
@@ -275,8 +374,11 @@ private:
                     std::size_t endFrame,
                     double volume,
                     double rate,
-                    bool reverse) {
+                    bool reverse,
+                    std::uint64_t soundId = 0) {
         Voice& voice = voices[slot];
+        voice.pending = {};
+        voice.soundId = soundId != 0 ? soundId : ++soundCounter;
 
         voice.player.stop();
         voice.player.detachSample();

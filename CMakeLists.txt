@@ -30,6 +30,16 @@ add_executable(databreaks_engine_016 tests/audio/engine_016.cpp)
 add_executable(databreaks_engine_017 tests/audio/engine_017.cpp)
 add_executable(databreaks_engine_018 tests/audio/engine_018.cpp)
 add_executable(databreaks_engine_019 tests/audio/engine_019.cpp)
+add_executable(databreaks_engine_020 tests/audio/engine_020.cpp)
+
+# Engine 020 host benchmark: reports measurements only; not a CTest test.
+add_executable(databreaks_engine_020_benchmark
+    tests/audio/engine_020_benchmark.cpp
+)
+
+# engine_020 runs a real producer thread against the event queue.
+find_package(Threads REQUIRED)
+target_link_libraries(databreaks_engine_020 PRIVATE Threads::Threads)
 
 # Assertion-based host unit tests for the synth/DSP headers.
 add_executable(databreaks_dsp_unit_tests tests/unit/dsp_unit_tests.cpp)
@@ -65,6 +75,8 @@ foreach(target
     databreaks_engine_017
     databreaks_engine_018
     databreaks_engine_019
+    databreaks_engine_020
+    databreaks_engine_020_benchmark
     databreaks_dsp_unit_tests
     databreaks_tape_test
     databreaks_transport_test
@@ -100,6 +112,7 @@ foreach(name
     engine_017
     engine_018
     engine_019
+    engine_020
     tape_test
     transport_test
     tape_character_test

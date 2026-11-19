@@ -14,7 +14,8 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
-→ `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engine 019).
+→ `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines 019
+and 020).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -22,7 +23,7 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 019
+### Components through Engine 020
 
 | Header | Purpose | Tested by |
 |---|---|---|
@@ -36,9 +37,10 @@ flashable FM-1 firmware.
 | `core/audio/tape_stream_transport.h`, `tape_streaming_engine.h` | Block-streaming tape playback + processing | Engines 012–014 |
 | `core/audio/sample_player.h` | `SamplePlayer`: region, pitch/rate, reverse, linear interpolation, block processing (Engine 015) | `engine_015` |
 | `core/audio/sample_slice_map.h` | `SampleSliceMap`: even slicing + movable boundaries (Engine 016) | `engine_016` |
-| `core/audio/sample_voice_manager.h` | `SampleVoiceManager<N>`: fixed voice pool, oldest-voice stealing, mixing (Engine 017). Engine 019 added slot-addressed `triggerInSlot`, `releaseVoice` (linear fade), `stopVoice`, per-slot queries and a per-slot generation counter; the original API behaves as before | `engine_017`, `engine_019` |
+| `core/audio/sample_voice_manager.h` | `SampleVoiceManager<N>`: fixed voice pool, oldest-voice stealing, mixing (Engine 017). Engine 019 added slot-addressed `triggerInSlot`, `releaseVoice` (linear fade), `stopVoice`, per-slot queries and a per-slot generation counter. Engine 020 added queued sounds (`queueInSlot`, `cancelPending`, `hasPending`) and unique sound ids. The original API behaves as before | `engine_017`, `engine_019`, `engine_020` |
 | `core/audio/drum_pad_bank.h` | `DrumPadBank<27>`: per-pad sample/region, volume, pitch, velocity sensitivity, reverse, choke groups → `TriggerEvent` (Engine 018). Unchanged by Engine 019 | `engine_018` |
-| `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019) | `engine_019` (50 checks) |
+| `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16, EventCapacity = 256>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019); click-free voice stealing, frame-accurate queued events, statistics (Engine 020) | `engine_019` (50 checks), `engine_020` (29 checks) |
+| `core/audio/drum_event_queue.h` | `DrumEventQueue<N>`: fixed-capacity lock-free single-producer/single-consumer event ring (Engine 020) | `engine_020` (incl. a two-thread test) |
 
 ### Engine 019 — drum voice integration (implemented, host-side only)
 
@@ -54,15 +56,34 @@ voice count are independent (default 16 voices, like the manager's default).
   bypass ownership tracking.
 - `processBlock` **adds into** the output buffer (same convention as
   `SampleVoiceManager`). Pad activity is updated at the end of each block.
-- Ownership: each voice slot records `{pad, generation}`. A record counts only
-  while the slot's generation matches and the voice is active.
+- Ownership: each voice slot records `{pad, soundId}` (Engine 020; Engine 019
+  used the per-slot generation). A record counts only while that sound is
+  the one sounding in the slot, or the one queued there.
 - Choke and same-pad retrigger (default `RetriggerPolicy::FadeAndRetrigger`)
   start a linear fade of `releaseFadeFrames()` frames (default 240 = 5 ms at
   48 kHz). Fades only ever get quieter or faster.
-- Slot choice when hitting a pad: lowest free slot → oldest releasing voice →
-  oldest voice (a hard steal, with no fade).
-- Full details, limitations and test results: `docs/PROGRESS_REPORT.md` §6.
+- Slot choice when hitting a pad (Engine 020): lowest free slot → quietest
+  releasing voice → oldest playing voice → earliest queued sound. A stolen
+  voice gets a short steal fade (default 48 frames = 1 ms, at most 10 ms),
+  and the new sound starts on the very next frame in the same slot.
+- Full details, limitations and test results: `docs/PROGRESS_REPORT.md` §6
+  (Engine 019) and §7 (Engine 020).
 - Do not change the synth or tape DSP as part of drum-engine work.
+
+### Engine 020 — performance and reliability (implemented, host-side only)
+
+- **Threading model:** `processBlock` and every non-`post*` method belong to
+  ONE audio thread. The `post*` methods (`postTrigger`, `postReleasePad`,
+  `postStopPad`, `postStopAll`) may be called from ONE other thread; they
+  only touch the lock-free queue. Nothing else is thread-safe. Do not
+  describe the engine as generally thread-safe.
+- Posted events carry a frame offset inside the next `processBlock` call and
+  are applied there in FIFO order. Offsets are clamped to the block. If the
+  queue is full, the event is rejected, `post*` returns false and
+  `droppedEventCount()` increases.
+- Benchmark: `databreaks_engine_020_benchmark` is built but is **not** a CTest
+  test. Its numbers describe the development host, not the FM-1. Build it in
+  Release for meaningful timings.
 
 ## Hardware constraints and safety rules
 
@@ -105,7 +126,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 22 tests
+ctest --test-dir build --output-on-failure          # all 23 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 
@@ -126,12 +147,16 @@ ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 3. Every new engine/component gets an assertion test registered in CTest with
    the `unit` label — add **both** the `add_executable` and the CTest entry
    (Engines 016–018 were once left out of the build by mistake).
-8. Audio-path code (`processBlock`, `trigger`, release/stop) must not allocate,
-   lock or block. `engine_019` check 41 enforces this for `DrumEngine` by
-   counting `operator new` calls; extend that pattern to new real-time code.
 4. Run the full build and `ctest` after every change; report exactly what was
    verified (host build, unit tests, listening) and what was not (hardware).
 5. Known bugs are listed in `docs/PROGRESS_REPORT.md`; fix them with tests that
    fail before the fix and pass after.
 6. Keep engine milestones (Engine 0NN) as separate, reviewable commits.
 7. Pad indices are 0–26 (27 pads); validate indices at API boundaries.
+8. Audio-path code (`processBlock`, `trigger`, `post*`, release/stop) must not
+   allocate, lock or block. `engine_019` check 41 and `engine_020` check 14
+   enforce this by counting `operator new` calls (reliable in the default
+   unoptimised build; optimisers may remove paired new/delete). Extend that
+   pattern to new real-time code.
+9. Code shared between threads must be tested under ThreadSanitizer
+   (`-fsanitize=thread`), and the claim must stay as narrow as the test.
