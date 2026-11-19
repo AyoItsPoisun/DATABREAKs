@@ -15,7 +15,7 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–023).
+019–024).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -23,18 +23,18 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 023
+### Components through Engine 024
 
 | Header | Purpose | Tested by |
 |---|---|---|
 | `core/audio/audio_engine.h` | 48 kHz stereo constants, `StereoFrame`, `midiToHz`, `clampAudio` | `dsp_unit_tests` |
 | `core/audio/mixer.h` | `StereoMixer` (master gain + hard clip). Since Engine 021 it is the master stage of `AudioPipeline` | `dsp_unit_tests`, `engine_021` |
-| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023), then the `StereoMixer` master stage; frame-accurate queued synth note events | `engine_021` (17), `engine_022` (29), `engine_023` (48), the render demos |
+| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023, tape added in Engine 024), then the `StereoMixer` master stage; frame-accurate queued synth note events | `engine_021` (17), `engine_022` (29), `engine_023` (48), `engine_024` (35), the render demos |
 | `core/audio/layering_mixer.h` | `LayeringMixer`: mono + FM + poly layer volumes, master | render demos 003/004 only |
 | `instruments/synthesizers/{mono,fm,poly}_synth.h`, `synth_parameters.h` | Original `MonoSynth`, `FMSynth`, `PolySynth` and stateless `calculateEnvelope` (Engines 002–004). **Unchanged** (findings B1–B4 still apply to them) so the 002–004 reference renders stay byte-identical | `dsp_unit_tests`, render demos 002–004 |
 | `instruments/synthesizers/synth_voices.h` | Stateful `AdsrEnvelope`, `MonoVoice`, `FmVoice`, `PolyVoice`: same parameter structs and formulas, with phase accumulators and stateful envelopes (fix B1–B4); `sanitized()` parameter guards (Engine 022) | `engine_022` (matches the originals to ~1e-12) |
 | `instruments/synthesizers/synth_engine.h` | `SynthEngine<Voice, N, Mono>`: note-on/off, velocity, pitch bend, voice allocation; `MonoSynthEngine`, `FmSynthEngine<4>`, `PolySynthEngine<8>` (Engine 022) | `engine_022` |
-| `core/audio/tape_machine.h` | Tape emulation: speed, tape type, wow/flutter, hiss, saturation, head bump, bias, compression, crosstalk, print-through, age | `tape_test`, `tape_character_test`, Engines 005–011 |
+| `core/audio/tape_machine.h` | Tape emulation: speed, tape type, wow/flutter, hiss, saturation, head bump, bias, compression, crosstalk, print-through, age. DSP unchanged; Engine 024 made `reset()` also restart the hiss generator (reset = new machine) | `tape_test`, `tape_character_test`, Engines 005–011, `engine_024` |
 | `core/audio/tape_transport.h` | Offline whole-buffer tape transport | `transport_test`, Engines 006/009/010 |
 | `core/audio/tape_processor.h` | Wrapper around `TapeMachine` | Engine 011 |
 | `core/audio/tape_stream_transport.h`, `tape_streaming_engine.h` | Block-streaming tape playback + processing | Engines 012–014 |
@@ -52,6 +52,7 @@ flashable FM-1 firmware.
 | `core/audio/effects/distortion.h` | `Distortion`: soft / asymmetric / fuzz, DC blocker, mode crossfade (Engine 023) | `engine_023` |
 | `core/audio/effects/reverb.h` | `Reverb`: 8-line feedback delay network, fixed 162,808-byte delay storage (Engine 023) | `engine_023` |
 | `core/audio/effects/effect_chain.h` | `EffectChain<N>`: ordered, fixed-capacity effect slots with `insert()` (Engine 023) | `engine_023` |
+| `core/audio/effects/tape_effect.h` | `TapeEffect`: owns a `TapeMachine` and runs it as an `AudioEffect` — validation, 20 ms glides, click-free speed/type switching, latency-aligned wet/dry (Engine 024) | `engine_024` (35) |
 
 ### Engine 019 — drum voice integration (implemented, host-side only)
 
@@ -152,9 +153,10 @@ voice count are independent (default 16 voices, like the manager's default).
 
 - Signal flow: `render()` = `mixSources()` (drums + synths, each × level) →
   `applyEffects()` (the chain, in place on the summed bus) → `applyMaster()`
-  (× master, hard safety clip). Chain order: **EQ → Compressor → SoftClipper
-  → Distortion → Reverb**, reached via `pipeline.eq()`, `.compressor()`,
-  `.softClipper()`, `.distortion()`, `.reverb()`, `.effects()`.
+  (× master, hard safety clip). Chain order since Engine 024: **EQ →
+  Compressor → SoftClipper → Tape → Distortion → Reverb**, reached via
+  `pipeline.eq()`, `.compressor()`, `.softClipper()`, `.tape()`,
+  `.distortion()`, `.reverb()`, `.effects()`.
 - **Every effect starts fully bypassed**, so existing renders are bit-exact.
   Enable with `setEnabled(true)` / `setBypassed(false)` (20 ms crossfade;
   `immediate = true` to skip it). A fully bypassed effect is not run at all.
@@ -164,14 +166,43 @@ voice count are independent (default 16 voices, like the manager's default).
   per sample, in place). Shared: bypass, wet/dry `setMix` (exact at 0 and 1),
   `reset()`. Parameter setters ignore NaN/inf and clamp; gains, frequencies,
   thresholds and levels glide over 20 ms per sample (`SmoothedValue`).
-- **Tape (Engine 024) goes in via `pipeline.effects().insert(position, &tapeEffect)`**,
-  wrapping `TapeMachine` in an `AudioEffect`. Do not rewrite the chain or
-  duplicate `TapeMachine`'s compression/saturation.
+- Tape was added in Engine 024 through `EffectChain::insert()` (see below).
+  `engine_023` checks the five Engine 023 effects by name and skips Tape.
 - Effect parameters are audio-thread only; there is no control queue yet.
 - Reverb delay storage is fixed (162,808 bytes in `double`, ~81 KB if ported
   to float). The FM-1's RAM is undocumented; do not assume it fits.
 - Benchmark: `databreaks_engine_023_benchmark` (built, not a CTest test; host
   numbers only).
+
+### Engine 024 — tape in the effects chain (implemented, host-side only)
+
+- `pipeline.tape()` is a `TapeEffect` (`core/audio/effects/tape_effect.h`) that
+  **owns** a `TapeMachine` by value and calls `TapeMachine::process()` for
+  every sample: the wet signal is exactly the existing tape DSP (tested bit for
+  bit). Do not change `TapeMachine`'s DSP to suit the adapter.
+- Controls (TapeMachine's own ranges and defaults): `setSpeed` (7.5/15/30 IPS,
+  default 15), `setTapeType` (ferric/chrome/metal, default ferric), and 0..1:
+  `setWow`, `setFlutter`, `setHiss`, `setSaturation`, `setHeadBump`, `setBias`
+  (default 0.5), `setCompression`, `setCrosstalk`, `setPrintThrough`, `setAge`
+  (others default 0). NaN/inf ignored (TapeMachine's own setters let NaN
+  through), values clamped, all continuous controls glide over 20 ms.
+- Speed/type switches duck the tape signal to the aligned dry signal over
+  5 ms, switch, and return over 5 ms (raw TapeMachine switching steps by up
+  to ~0.2 at high saturation). Setting the current value is a no-op.
+- **Latency:** TapeMachine delays by 12 ms (576 frames) plus wow/flutter.
+  `latencyFrames()` reports it; wet/dry mixes against a 576-frame-delayed dry
+  signal (no comb filter). Enabling tape delays the whole bus by 12 ms;
+  bypass returns to the undelayed signal (crossfaded).
+- **Gain:** TapeMachine's saturation also raises small-signal gain (about
+  drive / tanh(drive), +2.4 dB at defaults, more with saturation; output is
+  hard-limited to ±1). There is no output trim; lower the input or master.
+- Memory: 268,800 bytes of TapeMachine heap buffers (allocated once, when the
+  pipeline is constructed) + a 9,216-byte aligned dry line. Nothing is
+  allocated while processing.
+- The transport classes (`TapeTransport`, `TapeStreamTransport`,
+  `TapeStreamingEngine`) play stored recordings; they are not part of the
+  insert effect.
+- Benchmark: `databreaks_engine_024_benchmark` (built, not a CTest test).
 
 
 ## Hardware constraints and safety rules
@@ -216,7 +247,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 29 tests
+ctest --test-dir build --output-on-failure          # all 31 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 

@@ -274,6 +274,10 @@ public:
         printWriteIndex = 0;
         wowPhase = 0.0;
         flutterPhase = 0.0;
+
+        // Engine 024: also restart the hiss generator, so that a reset
+        // machine behaves exactly like a newly constructed one.
+        noiseState = InitialNoiseState;
     }
 
 private:
@@ -316,7 +320,8 @@ private:
 
     double envelope = 0.0;
 
-    std::uint32_t noiseState = 0x12345678;
+    static constexpr std::uint32_t InitialNoiseState = 0x12345678;
+    std::uint32_t noiseState = InitialNoiseState;
 
     static double clamp01(double value) {
         return std::clamp(value, 0.0, 1.0);

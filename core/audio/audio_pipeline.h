@@ -1,7 +1,7 @@
 
 #pragma once
 
-// DATABREAKs Engine 021-023 - unified host-side audio pipeline (C++17).
+// DATABREAKs Engine 021-024 - unified host-side audio pipeline (C++17).
 //
 // One rendering path for all sound sources and the master output:
 //
@@ -14,8 +14,8 @@
 //         |
 //         v
 //   effects (Engine 023, in place on the summed bus, in chain order):
-//     EQ -> Compressor -> SoftClipper -> Distortion -> Reverb
-//     (all bypassed by default; Engine 024 inserts tape via effects())
+//     EQ -> Compressor -> SoftClipper -> Tape -> Distortion -> Reverb
+//     (all bypassed by default; Tape added in Engine 024 via insert())
 //         |
 //         v
 //   master: StereoMixer (existing Engine 003 class)
@@ -60,6 +60,7 @@
 #include "effects/equalizer.h"
 #include "effects/reverb.h"
 #include "effects/soft_clipper.h"
+#include "effects/tape_effect.h"
 #include "../../instruments/synthesizers/synth_engine.h"
 
 #include <algorithm>
@@ -113,6 +114,9 @@ public:
         effects_.append(&softClipper_);
         effects_.append(&distortion_);
         effects_.append(&reverb_);
+        // Engine 024: tape goes after the soft clipper, through the chain's
+        // insertion point (the Engine 023 order of the others is unchanged).
+        effects_.insert(effects_.indexOf(&softClipper_) + 1, &tape_);
         for (std::size_t i = 0; i < effects_.size(); ++i) {
             effects_.slot(i)->setBypassed(true, true);
         }
@@ -125,6 +129,7 @@ public:
     SoftClipper& softClipper() { return softClipper_; }
     Distortion& distortion() { return distortion_; }
     Reverb& reverb() { return reverb_; }
+    TapeEffect& tape() { return tape_; }  // Engine 024
 
     // The ordered chain (insert() is the hook for later stages, e.g. tape).
     EffectChain<8>& effects() { return effects_; }
@@ -306,6 +311,7 @@ private:
     SoftClipper softClipper_;
     Distortion distortion_;
     Reverb reverb_;
+    TapeEffect tape_;
     EffectChain<8> effects_;
     std::uint64_t clippedSamples_ = 0;
     std::uint64_t invalidSamples_ = 0;

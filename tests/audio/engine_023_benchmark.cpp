@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <new>
+#include <string>
 #include <vector>
 
 namespace {
@@ -163,12 +164,12 @@ int main() {
             kick[i] = {v, v};
         }
         p.drums().assignSample(0, &kick);
-        for (std::size_t i = 0; i < p.effects().size(); ++i) {
-            p.effects().slot(i)->setBypassed(false, true);
-        }
         for (bool fx : {false, true}) {
             for (std::size_t i = 0; i < p.effects().size(); ++i) {
-                p.effects().slot(i)->setBypassed(!fx, true);
+                // The Engine 023 chain only; tape is benchmarked in Engine 024.
+                const bool tape =
+                    std::string(p.effects().slot(i)->name()) == "Tape";
+                p.effects().slot(i)->setBypassed(!fx || tape, true);
             }
             p.mono().reset();
             p.fm().reset();

@@ -706,6 +706,9 @@ void enableAll(Pipeline& p) {
     p.compressor().setMakeupDb(3.0);
     p.distortion().setMix(0.3);
     for (std::size_t i = 0; i < p.effects().size(); ++i) {
+        // Engine 024 added Tape to the chain; Engine 023 checks keep
+        // measuring the five Engine 023 effects (tape: engine_024).
+        if (std::string(p.effects().slot(i)->name()) == "Tape") continue;
         p.effects().slot(i)->setBypassed(false, true);
     }
 }
@@ -771,18 +774,19 @@ void pipeline() {
 
     {
         static Pipeline p;
-        bool allBypassed = p.effects().size() == 5;
+        // Engine 024 inserted Tape after SoftClipper (6 slots).
+        bool allBypassed = p.effects().size() == 6;
         for (std::size_t i = 0; i < p.effects().size(); ++i) {
             allBypassed = allBypassed && p.effects().slot(i)->fullyBypassed();
         }
         const char* expected[] = {"Equalizer", "Compressor", "SoftClipper",
-                                  "Distortion", "Reverb"};
+                                  "Tape", "Distortion", "Reverb"};
         bool order = true;
-        for (std::size_t i = 0; i < 5; ++i) {
+        for (std::size_t i = 0; i < 6; ++i) {
             order = order && std::string(p.effects().slot(i)->name()) == expected[i];
         }
         check(allBypassed && order,
-              "PI1 Chain order EQ > Compressor > SoftClipper > Distortion > Reverb, all bypassed by default");
+              "PI1 Chain order EQ > Compressor > SoftClipper > Tape > Distortion > Reverb, all bypassed by default");
     }
     {
         std::uint64_t clippedOn = 0;

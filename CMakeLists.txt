@@ -37,10 +37,17 @@ add_executable(databreaks_engine_022 tests/audio/engine_022.cpp)
 add_executable(databreaks_engine_022_render tests/audio/engine_022_render.cpp)
 add_executable(databreaks_engine_023 tests/audio/engine_023.cpp)
 add_executable(databreaks_engine_023_render tests/audio/engine_023_render.cpp)
+add_executable(databreaks_engine_024 tests/audio/engine_024.cpp)
+add_executable(databreaks_engine_024_render tests/audio/engine_024_render.cpp)
 
 # Engine 023 host benchmark: reports measurements only; not a CTest test.
 add_executable(databreaks_engine_023_benchmark
     tests/audio/engine_023_benchmark.cpp
+)
+
+# Engine 024 host benchmark: reports measurements only; not a CTest test.
+add_executable(databreaks_engine_024_benchmark
+    tests/audio/engine_024_benchmark.cpp
 )
 
 # Engine 020 host benchmark: reports measurements only; not a CTest test.
@@ -96,6 +103,9 @@ foreach(target
     databreaks_engine_023
     databreaks_engine_023_render
     databreaks_engine_023_benchmark
+    databreaks_engine_024
+    databreaks_engine_024_render
+    databreaks_engine_024_benchmark
     databreaks_dsp_unit_tests
     databreaks_tape_test
     databreaks_transport_test
@@ -135,6 +145,7 @@ foreach(name
     engine_021
     engine_022
     engine_023
+    engine_024
     tape_test
     transport_test
     tape_character_test
@@ -157,6 +168,7 @@ foreach(name
     engine_021_render
     engine_022_render
     engine_023_render
+    engine_024_render
 )
     add_test(NAME render_${name} COMMAND databreaks_${name})
     set_tests_properties(render_${name} PROPERTIES LABELS render)

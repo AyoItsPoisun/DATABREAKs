@@ -103,6 +103,9 @@ public:
     virtual void process(StereoFrame* buffer, std::size_t frames) = 0;
     virtual const char* name() const = 0;
 
+    // Processing delay of the effect's wet signal, in frames (Engine 024).
+    virtual std::size_t latencyFrames() const { return 0; }
+
     // Clears internal state and snaps smoothed parameters.
     void reset() {
         resetState();
@@ -156,9 +159,18 @@ protected:
 
 // CRTP helper: the per-sample effect is Derived::tick(StereoFrame), inlined
 // into one block loop that also applies bypass and wet/dry.
+//
+// Effects whose wet signal is delayed (Engine 024: tape) set
+// `static constexpr bool HasLatency = true` and provide alignedDry(): the
+// input delayed by the same amount. The wet/dry mix then blends aligned dry
+// with wet (no comb filtering), and the bypass crossfade blends the
+// undelayed input with that result. For every other effect the original
+// arithmetic is compiled unchanged (bit-identical to Engine 023).
 template <typename Derived>
 class EffectBase : public AudioEffect {
 public:
+    static constexpr bool HasLatency = false;
+
     void process(StereoFrame* buffer, std::size_t frames) final {
         if (buffer == nullptr || frames == 0 || fullyBypassed_) {
             return;
@@ -167,6 +179,12 @@ public:
         for (std::size_t i = 0; i < frames; ++i) {
             const StereoFrame dry = buffer[i];
             const StereoFrame wet = self.tick(dry);
+            if constexpr (Derived::HasLatency) {
+                const StereoFrame aligned = self.alignedDry();
+                buffer[i] = blend(dry, blend(aligned, wet, mix_.next()),
+                                  active_.next());
+                continue;
+            }
             const double m = mix_.next() * active_.next();
             if (m == 1.0) {
                 buffer[i] = wet;
@@ -181,6 +199,16 @@ public:
             active_.current() == 0.0) {
             fullyBypassed_ = true;
         }
+    }
+
+private:
+    // Exact at the end points: m = 0 gives a, m = 1 gives b.
+    static StereoFrame blend(const StereoFrame& a, const StereoFrame& b,
+                             double m) {
+        if (m == 1.0) return b;
+        if (m == 0.0) return a;
+        return {a.left * (1.0 - m) + b.left * m,
+                a.right * (1.0 - m) + b.right * m};
     }
 };
 
