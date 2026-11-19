@@ -1,7 +1,8 @@
 # DATABREAKs progress report
 
-Updated 2026-11-19 for Engine 021 on branch `claude/engine-019-prep-transfer`.
-Engine 021 starts from `dfd3164` (Engine 020); Engine 020 started from
+Updated 2026-11-19 for Engine 022 on branch `claude/engine-019-prep-transfer`.
+Engine 022 starts from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
 ("Recover audio engine development through Engine 018").
@@ -12,11 +13,12 @@ History of this report:
 - **`e54db9b`:** updated after the sample player, slice map, voice manager and 27-pad drum bank were recovered in `e75b325`.
 - **`ce44e70`:** updated for Engine 019 (drum voice integration).
 - **`dfd3164`:** updated for Engine 020 (drum engine performance and reliability).
-- **Engine 021 commit:** updated for Engine 021 (unified audio pipeline).
+- **`100a8e1`:** updated for Engine 021 (unified audio pipeline).
+- **Engine 022 commit:** updated for Engine 022 (synthesizer integration); the outcomes of findings B1–B4 were added in §4.1.
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 021**:
+The repository contains host-side C++17 prototypes through **Engine 022**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -26,7 +28,8 @@ The repository contains host-side C++17 prototypes through **Engine 021**:
 - a 27-pad drum bank (018);
 - drum voice integration (019);
 - drum engine performance and reliability (020);
-- **a unified audio pipeline** (021): drums → drum level → `StereoMixer` master.
+- a unified audio pipeline (021): drums → drum level → `StereoMixer` master;
+- **synthesizer integration** (022): stateful mono, FM and poly synths with note-on/off, velocity and pitch bend, as pipeline sources alongside the drums. Findings B1–B4 are fixed in the new voices.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -39,13 +42,32 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–021 have been run only on a
+pad scanning, storage or boot code. Engines 019–022 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 021 commit
+### 2.1 Engine 022 commit
+
+Same environment as §2.3.
+
+| Check | Result |
+|---|---|
+| Default build | 28 executables (27 registered tests + the benchmark), **0 warnings** |
+| `ctest --test-dir build --output-on-failure` | **27/27 pass** (the 25 existing tests plus `engine_022` and `render_engine_022_render`) |
+| `-L unit` / `-L render` | **15/15** / **12/12 pass** |
+| `engine_022` | **29/29 checks**. `engine_017` 22/22, `engine_019` 50/50, `engine_020` 29/29 and `engine_021` 17/17 are unchanged |
+| Release `-O3 -DNDEBUG` | **0 warnings, 27/27 pass** |
+| ASan + UBSan (Debug, leak detection on) | **0 warnings, 27/27 pass**, no reports |
+| ThreadSanitizer | `engine_020` 29/29, `engine_021` 17/17, `engine_022` 29/29 (including the T2 producer-thread test), no reports |
+| Allocation | `engine_022` R1: 0 allocations. `engine_019` check 41, `engine_020` check 14 and `engine_021` check 11 still pass |
+| Existing render WAVs | All 16 reference WAVs byte-identical to `e54db9b`'s. The `engine_021` demo is byte-identical to the committed `databreaks_engine_021_demo.wav` |
+| New demo | `databreaks_engine_022_demo.wav`: valid, and byte-identical across four runs and three build types (§9.5) |
+| `git diff --check` | Clean |
+| Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
+
+### 2.2 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -64,7 +86,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.2 Engine 020 commit (`dfd3164`)
+### 2.3 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -84,7 +106,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.3 Engine 019 commit (`ce44e70`, for reference)
+### 2.4 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -94,7 +116,8 @@ WAVs byte-identical to `e54db9b`.
 | Component | Engine | Status | Notes |
 |---|---|---|---|
 | `audio_engine.h`, `StereoMixer` | 001–003 | Working prototype | Unit-tested. Since Engine 021, `StereoMixer` is the pipeline's master stage |
-| Synths + ADSR (`instruments/synthesizers/`) | 002–004 | Prototype with known bugs | B1–B4 below. **Unchanged** |
+| Original synths + stateless ADSR (`mono/fm/poly_synth.h`, `synth_parameters.h`) | 002–004 | Prototype with known bugs, kept as reference | B1–B4 still apply to these classes; **unchanged** so the 002–004 reference renders stay byte-identical |
+| Stateful synth voices and engines (`synth_voices.h`, `synth_engine.h`) | 022 | Working prototype, tested | B1–B4 fixed; reproduce the originals for normal notes (§9) |
 | `LayeringMixer` | 004 | Working prototype | No output clamp (the demo's WAV writer clamps). No unit test |
 | Tape machine / transport / streaming | 005–014 | Working prototype | Assertion tests in 011–013 and the three `tape_*_test` programs. 005–010 and 014 are renders or benchmarks. **Unchanged** |
 | `SamplePlayer` | 015 | Working prototype, tested | Linear interpolation, reverse, pitch/rate. **Unchanged** |
@@ -103,8 +126,9 @@ WAVs byte-identical to `e54db9b`.
 | `DrumPadBank<27>` | 018 | Working prototype, tested | **Unchanged**. Its `active` flag is now kept in sync by `DrumEngine` |
 | `DrumEngine<N, E>` | 019, 020 | Working prototype, tested | See §6 and §7 |
 | `DrumEventQueue<N>` | 020 | Working prototype, tested | Lock-free single-producer/single-consumer ring; see §7.4 |
-| `AudioPipeline<V, E>` | 021 | Working prototype, tested | Unified host render path; see §8 |
-| MIDI input, sequencing, effects, synth routing | — | Not started | The Engine 020 queue is the hand-off point for input. New sources go into `AudioPipeline::mixSources` |
+| `AudioPipeline<V, E, S>` | 021, 022 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths; see §8 and §9 |
+| `SpscRing<T, N>` | 020, 022 | Working prototype, tested | Generalised drum queue; carries drum and synth events |
+| MIDI byte input, sequencing, effects | — | Not started | The pipeline's `post*` queues are the hand-off point for input. New sources go into `AudioPipeline::mixSources` |
 | Firmware (HAL, drivers, display, pads, storage, boot) | — | Not started | Depends on hardware facts that are not yet documented |
 
 ## 4. DSP findings (synth/envelope code, carried over unchanged)
@@ -119,6 +143,36 @@ by request. They were first reported in `eb93203`.
 - **B2: early release is ignored.** In `calculateEnvelope`, the attack and decay branches don't check `gate`. If the note is released before attack + decay completes, the envelope still finishes the full attack and decay, and only then releases from the sustain level. With `gate = 0`, a note still plays a full attack and decay.
 - **B3: release starts from the sustain level, not the current level.** Even with B2 fixed, releasing during the attack or decay would jump to the sustain level, causing a click.
 - **B4: phase is computed from absolute time.** `sin(2πf·t)` restarts at every note. That means no continuous phase, no retriggering without a click, and poor precision as `t` grows. On a target without double-precision floating point it is also expensive (`sin`/`exp`/`pow` per sample).
+
+### 4.1 Outcomes (Engine 022)
+
+The wording above is kept exactly as first reported. Before Engine 022 each
+finding was re-tested against the unchanged code: `instruments/` had not
+changed since `90e8dfb`.
+
+**B1: hard cut on Poly chord changes.**
+
+- *Original code:* still present in `PolySynth` and the Engine 002–004 demos, which are deliberately unchanged.
+- *Engine 022:* resolved in the new engines. Chords are separate voices with their own envelopes. A new chord takes over voices that are still releasing, and the attack restarts from each voice's current level with continuous phase, so nothing is cut to 0.
+- *Measured (check B1):* the 003/004 progression (gate 0.88 s, release 0.25 s, chord change at 1.0 s) has a largest sample step of 1.6e-3 at the change, below the 8.8e-3 of steady playing.
+
+**B2: early release is ignored.**
+
+- *Re-test:* with attack 0.1 s, decay 0.2 s and gate 0.05 s, `calculateEnvelope` keeps rising to 0.8 at 0.08 s and finishes the decay.
+- *Refinement:* the release time is counted from the gate. When release finally begins at 0.3 s, it has therefore already "run". The level jumps from the sustain level straight to the value of a release that began at the gate: 0.5 → 0.0 in one sample with a 0.1 s release, or 0.5 → 0.1875 with a 0.4 s release. B2 and B3 together therefore produce a discontinuity.
+- *Engine 022:* resolved in `AdsrEnvelope`. `noteOff()` starts the release immediately in any stage. Check B2 shows the level only falls after a mid-attack note-off, reaching 0 exactly 4,800 frames (0.1 s) later.
+
+**B3: release starts from the sustain level, not the current level.**
+
+- *Original code:* still present in `calculateEnvelope`.
+- *Engine 022:* resolved. The release starts from the current level: the first release sample equals the last attack sample (check B3). A note-off mid-decay and a retrigger mid-release never step by more than the steepest legal slope, 1/480 per frame for a 10 ms attack (check B2/B3).
+
+**B4: phase is computed from absolute time.**
+
+- *Original code:* still present in the original classes. Re-test: restarting an FM note at t = 0 mid-cycle steps the output by 0.21 in one sample.
+- *Engine 022:* resolved with phase accumulators that carry across samples, blocks and notes.
+- *Measured:* a 10 s note rendered in blocks of 1/7/64/333/4096 is bit-identical to one block (B4a), and its phase is still exact to 1.6e-12 after 10 s (B4b). Retriggers keep the phase (B1).
+- *Cost:* still one `sin` per oscillator per sample in `double`, as noted in B4's last sentence. That part (target cost) remains open until the hardware is known.
 
 ## 5. Other issues found in the recovered code
 
@@ -764,21 +818,196 @@ nobody has listened to it yet.
 - `render()` masters the whole buffer, so audio added by the caller before `render()` is mastered too. That is intended for a final bus; use `mixSources()` when mastering happens elsewhere.
 - Everything is host-side `double` processing, and nothing has been run on an FM-1.
 
-## 9. Recommended next steps (in order)
+## 9. Engine 022: synthesizer integration
 
-1. Review Engines 019–021 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav`.
+Files:
+
+- new: `instruments/synthesizers/synth_voices.h`, `instruments/synthesizers/synth_engine.h`, `core/audio/spsc_ring.h`, `tests/audio/engine_022.cpp` (`unit`), `tests/audio/engine_022_render.cpp` (`render`);
+- changed: `core/audio/audio_pipeline.h` (synth sources and synth event queue), `core/audio/drum_event_queue.h` (now an alias of the generic ring), `CMakeLists.txt`.
+
+The original synth classes, `calculateEnvelope`, the mixers, tape, sampler,
+drum bank and drum engine are **unchanged**. All earlier milestone tests pass
+unchanged, the 16 reference WAVs are byte-identical, and the Engine 021 demo
+still matches the committed WAV.
+
+### 9.1 Why new stateful voices instead of editing the originals
+
+`MonoSynth`, `FMSynth`, `PolySynth` and `calculateEnvelope` are what the
+Engine 002–004 render demos and their reference WAVs depend on. Fixing them
+in place would change those reference renders.
+
+Engine 022 therefore adds stateful voices (`synth_voices.h`) that:
+
+- reuse the same parameter structs (`MonoParameters`, `FMParameters`, `PolyParameters`, `ADSRParameters`);
+- reuse the same formulas: sine plus sub-octave sine through the envelope-tracking one-pole low-pass (mono); two-operator FM with envelope-scaled depth; detuned sines with the original pan law (poly).
+
+They replace two things:
+
+- time-based phase with **phase accumulators** in cycles;
+- the stateless envelope with a **stateful ADSR** (`AdsrEnvelope`).
+
+For a note held past attack + decay and then released, the new voices
+reproduce the originals sample for sample:
+
+| Check | Comparison | Largest difference over 52,000 samples |
+|---|---|---|
+| E1 | `FmVoice` vs `FMSynth` | 2.6e-13 |
+| E2 | `MonoVoice` vs `MonoSynth` | 9.5e-13 |
+| E3 | `PolySynthEngine<4>` vs `PolySynth`, stereo | 3.6e-13 |
+
+These differences are floating-point rounding between accumulated phase and
+`f·t`.
+
+### 9.2 Synth engines and performance controls
+
+`SynthEngine<Voice, N, Mono>` (`synth_engine.h`) provides three engines:
+
+| Engine | Voices | Notes |
+|---|---|---|
+| `MonoSynthEngine` | 1 | Last-note priority over a 16-note held stack. Releasing the sounding note returns to the most recent held note without retrigger; releasing the last held note starts the release |
+| `FmSynthEngine<N = 4>` | 4 | Polyphonic. The original `FMSynth` was one voice; each FM voice sounds exactly like it |
+| `PolySynthEngine<N = 8>` | 8 | Slot *i* of *N* panned to (*i*/(*N*−1) − 0.5) × width + 0.5, which is the original law for *N* = 4 |
+
+Controls:
+
+- `noteOn(note, velocity)`:
+  - notes outside 0–127 are rejected;
+  - velocity ≤ 0 means note-off (MIDI convention);
+  - velocity above 127 is clamped;
+  - gain = velocity / 127, so 127 is the original level.
+- `noteOff`, `allNotesOff` (normal release) and `reset` (hard stop).
+- `setPitchBend(semitones)`: ±24, non-finite values ignored.
+- `setPitchBendMidi(0..16383, range)`: 8192 is centre.
+- `setParameters`: non-finite values fall back to defaults, and ranges are clamped (`sanitized()`).
+- `setLevel` (0–2).
+
+Polyphonic voice allocation, in order:
+
+1. the voice already playing this note;
+2. the lowest idle voice;
+3. the oldest releasing voice;
+4. the oldest held voice.
+
+Every retrigger or steal restarts the attack **from the current level** with
+continuous phase.
+
+### 9.3 Pipeline integration (no new mixer)
+
+`AudioPipeline` gained three sources: `mono()`, `fm()` and `poly()`.
+`mixSources()` now:
+
+1. renders the drums over the whole block (`DrumEngine` applies its own queued events at their frames; unchanged);
+2. renders the synths in segments between their queued events (`SynthEvent` in a fixed-capacity `SpscRing`, FIFO, offsets clamped to the block, 255 per block, overflow dropped and counted).
+
+Each synth adds level × (sum of its voices) into the bus. Then `applyMaster()`
+runs once, exactly as in Engine 021.
+
+Each gain is applied once:
+
+```
+oscillator × params.volume (× voiceVolume for poly) × velocity/127 × envelope
+           × source level (once, on the summed voices) ─► + bus ─► × master ─► clip
+```
+
+`LayeringMixer` stays as the per-frame mixer of the 003/004 demos only. The
+drum queue's ring was generalised to `SpscRing<T, N>` so synth events reuse
+the same tested code; `DrumEventQueue<N>` is now an alias.
+
+Threading:
+
+- direct synth calls are audio-thread only;
+- synth `post*` may come from one producer thread;
+- check T2 runs a real producer thread posting 20,000 synth events while the audio thread renders: every event is applied or counted, and ThreadSanitizer reports nothing.
+
+### 9.4 Tests: `tests/audio/engine_022.cpp`, 29 checks, all passing
+
+| Requested | Checks |
+|---|---|
+| FM / mono / poly rendering | F1, M1, P1, P2 (and E1–E3: identical to the originals) |
+| Arbitrary block sizes | B4a (1/7/64/333/4096 = one 10 s block), A1 (drums + 3 synths through the pipeline: block sizes 1, 7, 64, 333, 4096 and 30,000 bit-identical) |
+| Phase continuity | B4a, B4b (exact phase after 10 s: 1.6e-12) |
+| Note-on / note-off | N1, M2, P3 |
+| Velocity | V1 (64 gives exactly 64/127) |
+| Drums + synths together | G1 (equals the sum of the separate renders, bit-exact) |
+| Gain staging | G2 (level 0.5 × master 0.5 = 0.25), G3 (bus audio not rescaled) |
+| Stereo | P1 (slot 0 hard left), F1/M1 (centred) |
+| Silence afterwards | N1, S1 |
+| Invalid parameters | I1 (NaN/inf params sanitised, bad notes rejected), I2 (invalid posts, queue overflow counted) |
+| No audio-thread allocation | R1 (2,000 rounds of synth posts, notes, bends, drums and renders: 0) |
+| Deterministic output | D1, A1 |
+| Frame accuracy | T1 (drum at frame 37 and synth note at frame 100 in the same block) |
+| Findings | B1, B2, B3, B2/B3, B4a, B4b (§4.1) |
+| Pitch bend | B (+12 = one octave; MIDI 0/8192/16383 = −2/0/+2; clamping) |
+| Threading | T2 |
+
+Mutation checks. Every one was caught:
+
+- B2 bug reintroduced (release ignored before sustain): 5 checks fail;
+- B3 bug reintroduced (release from sustain): 2 checks;
+- attack restarting from 0: 2 checks;
+- B4 reintroduced (voice state reset on every note): check B1;
+- synth event offsets ignored: T1, A1;
+- synth level also scaling the bus: G3;
+- releasing-first stealing removed: P3. This one was missed at first, because the releasing voice was also the oldest; P3 was rewritten so the two rules disagree, and it now catches the mutant.
+
+### 9.5 Render demonstration: `render_engine_022_render`
+
+The demo is an original 4-bar piece at 120 BPM:
+
+- a synthesised drum kit, with the open hi-hat choked by the closed hi-hat;
+- a mono bass on an eighth-note pulse with accents, sliding up 2 semitones over the last beat;
+- an FM bell melody over bars 2–4;
+- 8-voice poly pad chords, one per bar (Dm7, Bb maj7, F maj7/A, C(add9)/E).
+
+All 128 synth events and 52 drum events go through the queues at exact frames
+in 256-frame blocks.
+
+Output: `databreaks_engine_022_demo.wav`, 9.50 s (456,000 frames), 48 kHz,
+16-bit stereo PCM. It is written into the build directory under CTest and
+ignored by git.
+
+The program checks itself:
+
+- peak 0.8896 (written: 0.8721 left, 0.8896 right), 0 clipped samples;
+- RMS 0.1276 left, 0.1265 right;
+- solo RMS: drums 0.0862, mono 0.0842, FM 0.0349, poly 0.0216;
+- the full mix equals the sum of the four solo renders to within 3.3e-16;
+- a second render is bit-identical;
+- every event was applied and none dropped.
+
+Independently checked with Python's `wave` module:
+
+- the header is valid and the file size matches it;
+- MD5 `0cfa5643791ee4e77fae3c8353ae5c72`, identical across four runs and the default, Release `-O3` and ASan builds.
+
+It is a software render on the development host, not an FM-1 recording, and
+nobody has listened to it yet.
+
+### 9.6 Remaining limitations
+
+- The original `MonoSynth`/`FMSynth`/`PolySynth`/`calculateEnvelope` still have findings B1–B4. They are kept only for the 002–004 reference demos.
+- Synth level, master level and pitch-bend changes apply instantly (pitch bend from the next sample), so large jumps can step. There is no smoothing or portamento.
+- Voices use per-sample `sin`/`exp` in `double`; target cost is unknown.
+- There is no velocity curve beyond linear, no per-voice pan for mono/FM, no modulation or aftertouch, no sustain pedal, and no MIDI byte parsing or device driver (out of scope).
+- Each queue is single-producer; the configuration and direct-call APIs are audio-thread only.
+- 255 posted synth events per block at most; the rest are dropped and counted.
+- Nothing has been run on an FM-1.
+
+## 10. Recommended next steps (in order)
+
+1. Review Engines 019–022 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022 demo render.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
-4. Engine 022 candidates:
-   - per-frame level smoothing for drum and master levels;
-   - per-pad pan;
-   - a velocity curve;
-   - reduce `trigger()` cost: the choke scan is O(27 × voices) (§7.8);
-   - a stateful synth voice so synths can join `mixSources()` (needs B2–B4).
-5. Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators, in separate commits with tests that fail first.
+4. Engine 023 candidates:
+   - per-frame smoothing for levels and pitch bend;
+   - per-pad / per-voice pan;
+   - velocity curves;
+   - reduce drum `trigger()` cost: the choke scan is O(27 × voices) (§7.8);
+   - a step sequencer that posts drum and synth events.
+5. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
 6. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
 
-## 10. Change log on this branch
+## 11. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -808,3 +1037,12 @@ nobody has listened to it yet.
   - updated `CLAUDE.md` and this report.
 
   No synth, tape, `SamplePlayer`, `SampleSliceMap`, `DrumPadBank` or `StereoMixer` code changed. Engine 003 was not touched.
+- **`e4d796c`:** added `databreaks_engine_021_demo.wav` (force-added on request; no source changes).
+- **Engine 022 commit:**
+  - added `instruments/synthesizers/synth_voices.h`, `instruments/synthesizers/synth_engine.h`, `core/audio/spsc_ring.h`, `tests/audio/engine_022.cpp` and `tests/audio/engine_022_render.cpp`;
+  - `core/audio/audio_pipeline.h`: synth sources, levels and the synth event queue;
+  - `core/audio/drum_event_queue.h`: now an alias of `SpscRing`;
+  - `CMakeLists.txt`: two targets, `Threads::Threads` for `engine_022`, the warning loop, one `unit` and one `render` test entry;
+  - updated `CLAUDE.md` and this report.
+
+  The original synth classes, `calculateEnvelope`, `LayeringMixer`, `StereoMixer`, tape, `SamplePlayer`, `SampleSliceMap`, `DrumPadBank` and `DrumEngine` were not changed. Engine 003 was not touched.

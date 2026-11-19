@@ -15,8 +15,8 @@
 // Usable capacity is Capacity - 1 events (one slot separates full from
 // empty).
 
-#include <array>
-#include <atomic>
+#include "spsc_ring.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -37,62 +37,9 @@ struct DrumEvent {
     std::size_t frameOffset = 0;
 };
 
+// The ring itself is the generic SpscRing (spsc_ring.h); this alias keeps
+// the Engine 020 name and interface.
 template <std::size_t Capacity = 256>
-class DrumEventQueue {
-public:
-    static_assert(Capacity >= 2 && (Capacity & (Capacity - 1)) == 0,
-                  "Capacity must be a power of two and at least 2");
-    static_assert(std::atomic<std::size_t>::is_always_lock_free,
-                  "std::atomic<std::size_t> must be lock-free");
-    static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
-                  "std::atomic<std::uint32_t> must be lock-free");
-
-    static constexpr std::size_t capacity() { return Capacity - 1; }
-
-    // Producer thread only.
-    bool push(const DrumEvent& event) {
-        const std::size_t tail = tail_.load(std::memory_order_relaxed);
-        const std::size_t next = (tail + 1) & (Capacity - 1);
-
-        if (next == head_.load(std::memory_order_acquire)) {
-            dropped_.fetch_add(1, std::memory_order_relaxed);
-            return false;
-        }
-
-        buffer_[tail] = event;
-        tail_.store(next, std::memory_order_release);
-        return true;
-    }
-
-    // Consumer thread only.
-    bool pop(DrumEvent& event) {
-        const std::size_t head = head_.load(std::memory_order_relaxed);
-
-        if (head == tail_.load(std::memory_order_acquire)) {
-            return false;
-        }
-
-        event = buffer_[head];
-        head_.store((head + 1) & (Capacity - 1), std::memory_order_release);
-        return true;
-    }
-
-    // Approximate when called while the other side is active.
-    bool empty() const {
-        return head_.load(std::memory_order_acquire) ==
-               tail_.load(std::memory_order_acquire);
-    }
-
-    // Events rejected because the queue was full (wraps after 2^32).
-    std::uint32_t droppedCount() const {
-        return dropped_.load(std::memory_order_relaxed);
-    }
-
-private:
-    std::array<DrumEvent, Capacity> buffer_{};
-    std::atomic<std::size_t> head_{0};
-    std::atomic<std::size_t> tail_{0};
-    std::atomic<std::uint32_t> dropped_{0};
-};
+using DrumEventQueue = SpscRing<DrumEvent, Capacity>;
 
 } // namespace databreaks

@@ -15,7 +15,7 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–021).
+019–022).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -23,15 +23,17 @@ target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
 or boot code. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 021
+### Components through Engine 022
 
 | Header | Purpose | Tested by |
 |---|---|---|
 | `core/audio/audio_engine.h` | 48 kHz stereo constants, `StereoFrame`, `midiToHz`, `clampAudio` | `dsp_unit_tests` |
 | `core/audio/mixer.h` | `StereoMixer` (master gain + hard clip). Since Engine 021 it is the master stage of `AudioPipeline` | `dsp_unit_tests`, `engine_021` |
-| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents>`: the unified host render path — sources (drums now) added into a bus at their levels, then the `StereoMixer` master stage (Engine 021) | `engine_021` (17 checks), `render_engine_021_render` |
+| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the `StereoMixer` master stage; frame-accurate queued synth note events | `engine_021` (17), `engine_022` (29), both render demos |
 | `core/audio/layering_mixer.h` | `LayeringMixer`: mono + FM + poly layer volumes, master | render demos 003/004 only |
-| `instruments/synthesizers/*.h` | `MonoSynth`, `FMSynth`, `PolySynth`, stateless ADSR | `dsp_unit_tests` (known bugs B1–B4) |
+| `instruments/synthesizers/{mono,fm,poly}_synth.h`, `synth_parameters.h` | Original `MonoSynth`, `FMSynth`, `PolySynth` and stateless `calculateEnvelope` (Engines 002–004). **Unchanged** (findings B1–B4 still apply to them) so the 002–004 reference renders stay byte-identical | `dsp_unit_tests`, render demos 002–004 |
+| `instruments/synthesizers/synth_voices.h` | Stateful `AdsrEnvelope`, `MonoVoice`, `FmVoice`, `PolyVoice`: same parameter structs and formulas, with phase accumulators and stateful envelopes (fix B1–B4); `sanitized()` parameter guards (Engine 022) | `engine_022` (matches the originals to ~1e-12) |
+| `instruments/synthesizers/synth_engine.h` | `SynthEngine<Voice, N, Mono>`: note-on/off, velocity, pitch bend, voice allocation; `MonoSynthEngine`, `FmSynthEngine<4>`, `PolySynthEngine<8>` (Engine 022) | `engine_022` |
 | `core/audio/tape_machine.h` | Tape emulation: speed, tape type, wow/flutter, hiss, saturation, head bump, bias, compression, crosstalk, print-through, age | `tape_test`, `tape_character_test`, Engines 005–011 |
 | `core/audio/tape_transport.h` | Offline whole-buffer tape transport | `transport_test`, Engines 006/009/010 |
 | `core/audio/tape_processor.h` | Wrapper around `TapeMachine` | Engine 011 |
@@ -41,7 +43,8 @@ flashable FM-1 firmware.
 | `core/audio/sample_voice_manager.h` | `SampleVoiceManager<N>`: fixed voice pool, oldest-voice stealing, mixing (Engine 017). Engine 019 added slot-addressed `triggerInSlot`, `releaseVoice` (linear fade), `stopVoice`, per-slot queries and a per-slot generation counter. Engine 020 added queued sounds (`queueInSlot`, `cancelPending`, `hasPending`) and unique sound ids. Engine 021 added `setOutputGain` (bus level, default 1.0). The original API behaves as before | `engine_017`, `engine_019`, `engine_020` |
 | `core/audio/drum_pad_bank.h` | `DrumPadBank<27>`: per-pad sample/region, volume, pitch, velocity sensitivity, reverse, choke groups → `TriggerEvent` (Engine 018). Unchanged by Engine 019 | `engine_018` |
 | `core/audio/drum_engine.h` | `DrumEngine<VoiceCount = 16, EventCapacity = 256>`: 27 pads → managed sample voices, pad-to-voice ownership, real choke groups, 5 ms linear release fades, same-pad retrigger policy, voice-synchronised pad activity (Engine 019); click-free voice stealing, frame-accurate queued events, statistics (Engine 020) | `engine_019` (50 checks), `engine_020` (29 checks) |
-| `core/audio/drum_event_queue.h` | `DrumEventQueue<N>`: fixed-capacity lock-free single-producer/single-consumer event ring (Engine 020) | `engine_020` (incl. a two-thread test) |
+| `core/audio/drum_event_queue.h` | `DrumEvent` and `DrumEventQueue<N>` (Engine 020); since Engine 022 an alias of `SpscRing<DrumEvent, N>` | `engine_020` (incl. a two-thread test) |
+| `core/audio/spsc_ring.h` | `SpscRing<T, N>`: the fixed-capacity lock-free single-producer/single-consumer ring, generalised from Engine 020's queue in Engine 022 (drum and synth events) | `engine_020`, `engine_022` (two-thread tests) |
 
 ### Engine 019 — drum voice integration (implemented, host-side only)
 
@@ -107,10 +110,37 @@ voice count are independent (default 16 voices, like the manager's default).
 - No scratch buffer and no block splitting, so any block size works and
   queued event offsets stay frame-exact. Posted events for one block are
   limited to `eventCapacity()` (255); extra ones are dropped and counted.
-- `LayeringMixer` (synth demos 003/004) is unchanged and not yet routed
-  through the pipeline: the synths are still stateless per-sample functions
-  (finding B4).
-- `.gitignore` ignores `build/` and `*.wav`.
+- `LayeringMixer` (synth demos 003/004) is unchanged. It is a legacy
+  per-frame mixer for those demos; the pipeline does not use it (Engine 022
+  synths have their own source levels).
+- `.gitignore` ignores `build/` and `*.wav`. `databreaks_engine_021_demo.wav`
+  at the repository root was force-added on request (`e4d796c`).
+
+### Engine 022 — synthesizer integration (implemented, host-side only)
+
+- **Use the stateful engines for new synth work**: `MonoSynthEngine`,
+  `FmSynthEngine<N=4>`, `PolySynthEngine<N=8>` (`synth_engine.h`), reached as
+  `pipeline.mono()`, `.fm()`, `.poly()`. Do not modify the original
+  `MonoSynth`/`FMSynth`/`PolySynth`/`calculateEnvelope`: the Engine 002–004
+  reference renders depend on them byte for byte.
+- The new voices reproduce the originals sample for sample for a normally
+  played note (`engine_022` E1–E3). They differ only where the originals were
+  wrong: early release, retrigger and block rendering (findings B1–B4).
+- Control: `noteOn(note 0..127, velocity)` (velocity ≤ 0 = note-off, > 127
+  clamped, gain = velocity/127), `noteOff`, `allNotesOff`, `reset` (hard
+  stop), `setPitchBend(semitones, ±24)`, `setPitchBendMidi(0..16383, range)`,
+  `setParameters` (sanitised), `setLevel`.
+- Mono: last-note priority over a 16-note held stack. FM/poly allocation:
+  same note → lowest idle → oldest releasing → oldest held; retrigger/steal
+  restarts the attack from the current level with continuous phase.
+- Pipeline routing: `mixSources()` = drums (whole block, own queue) then
+  synths rendered in segments between queued synth events. Each synth sums
+  its voices × its level once; master once. Synth events:
+  `postNoteOn/postNoteOff/postPitchBend/postAllNotesOff(target, …, offset)`,
+  255 per block, overflow dropped and counted.
+- Threading: direct synth calls are audio-thread only; synth `post*` from ONE
+  producer thread (the same thread may also feed the drum queue).
+
 
 ## Hardware constraints and safety rules
 
@@ -153,7 +183,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 25 tests
+ctest --test-dir build --output-on-failure          # all 27 tests
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 
