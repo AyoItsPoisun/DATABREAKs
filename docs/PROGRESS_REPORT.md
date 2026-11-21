@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-19 for Engine 028 on branch `claude/engine-019-prep-transfer`.
-Engine 028 starts from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-21 for Engine 029 on branch `claude/engine-019-prep-transfer`.
+Engine 029 starts from `d0790c0` (Engine 028). Engine 028 started from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -20,11 +20,12 @@ History of this report:
 - **`f94fcef`:** updated for Engine 025 (sequencer foundation).
 - **`7712644`:** updated for Engine 026 (recording and performance capture).
 - **`2c6c2bd`:** updated for Engine 027 (non-destructive quantization).
-- **Engine 028 commit:** updated for Engine 028 (pattern banks, switching and arrangement foundation).
+- **`d0790c0`:** updated for Engine 028 (pattern banks, switching and arrangement foundation).
+- **Engine 029 commit:** updated for Engine 029 (target portability boundary).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 028**:
+The repository contains host-side C++17 prototypes through **Engine 029**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -41,7 +42,8 @@ The repository contains host-side C++17 prototypes through **Engine 028**:
 - a sequencer foundation (025): an exact musical clock, 27-pad drum and synth-note patterns, and sample-accurate scheduling into the existing instruments, identical for any block size;
 - performance recording (026): free and loop recording of drum hits and synth notes (musical events, not audio) with overdub, replace, punch in/out and 16-step undo/redo. Raw timing is kept at 1/1024-tick resolution and replays on the captured sample. Cross-thread control uses lock-free command and live-input queues;
 - non-destructive quantization (027): grid (whole to 1/64), strength 0–100 %, swing, per-kind and per-pad selection and optional note-off quantization, applied at playback from the untouched raw recording;
-- **pattern banks and an arrangement foundation** (028): 16 compactly stored patterns with their own recordings, undo history and quantize settings, sample-exact switching at beat/bar/loop boundaries, a song chain with repeats and end modes, and a versioned, checksummed save format.
+- pattern banks and an arrangement foundation (028): 16 compactly stored patterns with their own recordings, undo history and quantize settings, sample-exact switching at beat/bar/loop boundaries, a song chain with repeats and end modes, and a versioned, checksummed save format;
+- **a target portability boundary** (029): the core now compiles for 32-bit targets (portable exact 128-bit clock arithmetic, bit-identical); storage, audio-I/O and input interfaces (`platform/`) with host implementations; the save format streams through injected storage with no heap; build gates keep platform headers out of the core.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -54,15 +56,28 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–028 have been run only on a
+pad scanning, storage or boot code. Engines 019–029 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 028 commit
+### 2.1 Engine 029 commit
 
-Same environment as §2.9.
+Same environment as §2.10. See §16.6 for the full table.
+
+- **Default build:** 0 warnings; **43/43** CTest tests pass (39 existing + `engine_029` + 3 portability gates).
+- **Release, portable-integer and ASan+UBSan builds:** 43/43 each.
+- **TSan:** Engines 020–029, no reports.
+- **32-bit type-check:** clean.
+- **Renders:** all reference renders are byte-identical in both the native and the portable build.
+- **DBPB bytes:** identical to Engine 028.
+- **Mutation checks:** 15/15 caught.
+- **FM-1 hardware:** not run.
+
+### 2.2 Engine 028 commit (`d0790c0`)
+
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -80,9 +95,9 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.2 Engine 027 commit (`2c6c2bd`)
+### 2.3 Engine 027 commit (`2c6c2bd`)
 
-Same environment as §2.9.
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -100,9 +115,9 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.3 Engine 026 commit (`7712644`)
+### 2.4 Engine 026 commit (`7712644`)
 
-Same environment as §2.9.
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -120,9 +135,9 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.4 Engine 025 commit (`f94fcef`)
+### 2.5 Engine 025 commit (`f94fcef`)
 
-Same environment as §2.9.
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -139,9 +154,9 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.5 Engine 024 commit (`3bdd248`)
+### 2.6 Engine 024 commit (`3bdd248`)
 
-Same environment as §2.9.
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -159,9 +174,9 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.6 Engine 023 commit (`7a1ced6`)
+### 2.7 Engine 023 commit (`7a1ced6`)
 
-Same environment as §2.9.
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -179,9 +194,9 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.7 Engine 022 commit (`d326959`)
+### 2.8 Engine 022 commit (`d326959`)
 
-Same environment as §2.9.
+Same environment as §2.10.
 
 | Check | Result |
 |---|---|
@@ -198,7 +213,7 @@ Same environment as §2.9.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.8 Engine 021 commit (`100a8e1`)
+### 2.9 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -217,7 +232,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.9 Engine 020 commit (`dfd3164`)
+### 2.10 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -237,7 +252,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.10 Engine 019 commit (`ce44e70`, for reference)
+### 2.11 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -258,6 +273,7 @@ WAVs byte-identical to `e54db9b`.
 | `DrumEngine<N, E>` | 019, 020 | Working prototype, tested | See §6 and §7 |
 | `DrumEventQueue<N>` | 020 | Working prototype, tested | Lock-free single-producer/single-consumer ring; see §7.4 |
 | `AudioPipeline<V, E, S>` | 021–025 | Working prototype, tested | Unified host render path: drums + mono/FM/poly synths → effects chain → master, driven by the sequencer; see §8–§12 |
+| Target abstraction (`platform/`) and host implementations (`platform/host/`) | 029 | Working prototype, tested | Storage, audio I/O and input interfaces; memory/file storage, offline audio device, scripted input (host only); see §16 |
 | Sequencer (`core/sequencer/`) | 025–028 | Working prototype, tested | Musical clock, patterns, sample-accurate scheduling (§12); performance recording, command and live-input queues (§13); non-destructive quantization (§14); pattern bank, switching, arrangement, persistence (§15) |
 | Effects (`core/audio/effects/`) | 023, 024 | Working prototype, tested | EQ, compressor, soft clipper, tape (`TapeEffect`, 024), distortion, reverb, `EffectChain`; see §10 and §11 |
 | `SpscRing<T, N>` | 020, 022 | Working prototype, tested | Generalised drum queue; carries drum and synth events |
@@ -2524,9 +2540,265 @@ RAM budgets are unverified.
 - Memory: +226 KB per sequencer; FM-1 RAM is undocumented.
 - Nothing has been listened to, and nothing has been run on an FM-1.
 
-## 16. Recommended next steps (in order)
+## 16. Engine 029: target portability boundary
 
-1. Review Engines 019–028 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–028 demo renders.
+**The central question:** what must change, and what must stay unchanged, to make the existing engine realistically portable to the FM-1 without compromising the audio engine.
+
+**The short answer, from a read-only inspection of `d0790c0`:**
+- The engine is already almost target-clean. No exceptions, RTTI, threads, mutexes, files, iostreams, timing or OS calls appear anywhere in `core/` or `instruments/`; those exist only in the tests.
+- Type-checking the whole core for a 32-bit target found exactly **one** compile blocker: `__int128` in `MusicalClock`.
+- The engine had **no storage, audio-I/O or input boundary at all**. The serializer needed a contiguous `std::vector` and about 0.5 MB of heap.
+- Engine 029 therefore removes the blocker, adds the three boundaries with host implementations, and adds build gates that keep the core portable. **No sequencer behaviour, DSP or saved byte changed.**
+
+### 16.1 Inspection findings
+
+**Memory (x86-64 host, measured).**
+- `AudioPipeline<16>`: 919,840 B, plus 268,800 B of `TapeMachine` heap allocated at construction (≈ 1.13 MiB). `render()` allocates nothing.
+- Its largest parts:
+  - `Sequencer` 655,264 B (working `Pattern` 127,024; `Recorder` with `RecordedTrack` 201,152; bank 200,480; event buffer 90,112; quantize cache 16,384; rings, active notes and arrangement ≈ 20,000);
+  - `Reverb` 163,560 B;
+  - `DrumEngine<16>` 45,544 B;
+  - `TapeEffect` 10,080 B.
+- Sample audio is caller-owned `std::vector<StereoFrame>`: 16 B per stereo frame, 768 KB per second.
+- **On a 32-bit layout** (i686 with 8-byte-aligned 64-bit types, the closest available to ARM EABI; an estimate, not an FM-1 figure): `Sequencer` 632,072 B, `AudioPipeline<16>` 874,808 B, bank 199,960 B, `LoadScratch` 509,496 B.
+
+**Permanent vs working memory.**
+- **Permanent** (what DBPB persists): the bank (200,480 B in RAM), the arrangement (272 B) and the active id. The active pattern's working copy is authoritative until committed.
+  - DBPB size: about 5 KB per typical pattern; **206,026 B** worst case for full pools.
+- **Working:** the working pattern and recording, event buffer, quantize cache, rings, voices, and effect state (reverb 164 KB, tape 269 KB).
+- **Transient, not real-time:** loading needs a staged bank plus one pattern state, about 510 KB.
+
+**Not safe on a constrained target as written.**
+- `__int128` (fixed here).
+- The heap- and `std::vector`-bound serializer (fixed here).
+- `TapeMachine`'s construction-time heap, `SampleSliceMap`, and `TapeTransport::render()`'s returned vector.
+- `AudioPipeline` or `Sequencer` on the stack.
+- `double` DSP everywhere (515 uses) and `double` sample storage. The FM-1's FPU is unknown.
+
+**Host-only facilities relied on:**
+- `__int128`;
+- heap use in `pattern_io` and in `TapeMachine` construction;
+- `std::vector` (sample references, the tape transport, the slice map, the serializer's convenience API);
+- `std::unique_ptr` (the serializer only);
+- lock-free `std::atomic` (already `static_assert`ed).
+
+**Already portable:**
+- block processing at any block size, with no allocation, locks or I/O;
+- the SPSC rings;
+- the integer sequencer, quantizer, bank and arrangement;
+- the DBPB byte format (explicit, little-endian);
+- the effects interface (`virtual`, no RTTI);
+- `LiveEvent` (target-neutral, sample-timestamped).
+
+**Needed an abstraction:** persistent storage, audio I/O (codec format and blocking) and physical input.
+
+**Deliberately not abstracted (yet):**
+- *Clock/time:* the core is clocked by the sample count and needs no wall clock. Adding one would invent a dependency.
+- *Display:* no display code exists and the protocol is unknown.
+
+**Unknown FM-1 facts:** see §16.8.
+
+### 16.2 Architectural change
+
+```
+CORE  (core/, instruments/)       unchanged behaviour; no platform headers (gated)
+  audio engine, sequencer, pattern bank, DBPB serialization
+     |  depends only on the interfaces below
+TARGET ABSTRACTION  (platform/*.h) standard C++ only, no OS headers (gated)
+  storage.h   ByteSink, ByteSource, StorageBackend (atomic replace), MemoryByteSource
+  audio_io.h  AudioStreamConfig, AudioRenderCallback, AudioDevice, PipelineRenderer, conversion
+  input.h     InputEvent, InputSource, ControlHandler, QueueInputSource, InputRouter
+     |
+HOST IMPLEMENTATIONS  (platform/host/*.h)   may use the platform
+  memory_storage.h (fixed memory, fault injection), file_storage.h (files, temp + rename),
+  offline_audio_device.h, scripted_input.h
+     |
+FM-1 TARGET ADAPTER   (not written: the hardware facts are unknown, §16.8)
+```
+
+**A. Portable exact arithmetic (`core/sequencer/exact_int128.h`).**
+- `PortableInt128` is a two-word two's-complement integer with exactly `__int128`'s semantics for `+ − * / %`, comparisons, and conversion from and to `int64`. Division truncates toward zero, with a 64-bit fast path.
+- `ExactInt128` is the native `__int128` where the compiler has it, so host behaviour and speed are unchanged. Otherwise it is the portable class, or when `DATABREAKS_PORTABLE_INT128` forces it.
+- `MusicalClock` is now `BasicMusicalClock<ExactInt128>`. It became a template so both integers can be compared through the real clock in one test; the name and API are unchanged.
+- `samplesPerTick()` now narrows to `int64` before `double` (an exact conversion, identical result).
+
+**B. Storage boundary.**
+- `pattern_io::save(bank, arrangement, active, ByteSink&)` **streams** through a fixed 256-byte buffer with a running CRC. Record lengths are computed before they are written, so there is no contiguous buffer and no allocation.
+- `pattern_io::load(ByteSource&, LoadScratch&, …)` reads **by offset** and decodes into **caller-provided scratch**. There is no allocation inside the core, and loading is still all-or-nothing. Event records are validated in order and then restored by offset through `RecordedTrack::restoreFrom`, without an event buffer.
+- `saveTo` / `loadFrom` go through an injected `StorageBackend`. A failed or aborted write never damages the previous version; that is the backend's contract.
+- New statuses `ReadError` (a medium failure, distinct from a format error) and `NotFound` were appended to `LoadStatus`, so existing values are unchanged. New `SaveStatus` and `encodedSize()`.
+- The Engine 028 `std::vector` and pointer overloads remain as host conveniences and produce **identical bytes and results**. The output is pinned to the Engine 028 serializer: 5,705 bytes, body CRC `0x48a0ecfa`, FNV-1a-64 `0xbe055ea1726fdac6`.
+- `pattern_io.h` no longer includes `<memory>`: on hosted libstdc++ that drags the threading library into the core. The poison gate found this.
+- It now includes `musical_clock.h`, which it used without including. The new self-containment check guards against that.
+
+**C. Audio I/O boundary.**
+- `PipelineRenderer<P, 256>` renders an `AudioPipeline` in chunks of at most 256 frames into a fixed scratch, and converts to interleaved `Int16` / `Int32` / `Float32`.
+- The conversion is identical to the render demos' WAV writers.
+- `AudioStreamConfig` validates the stream: 48 kHz stereo only, which is what the core is; 1–8,192-frame blocks.
+
+**D. Input boundary.**
+- Target-neutral `InputEvent`s: PadDown/PadUp (pads 0–26, velocity 1–127), ButtonDown/ButtonUp and EncoderDelta with generic ids. **No FM-1 control mapping is invented.**
+- `InputRouter` turns PadDown into the existing `LiveEvent` (it sounds and is recorded through Engine 026). Buttons and encoders go to a `ControlHandler`. Invalid, unhandled and rejected events are counted.
+- `QueueInputSource` is a lock-free ISR-to-thread queue on the existing `SpscRing`.
+
+**E. Build gates (CMake/CTest, label `portability`).**
+- `databreaks_core_purity` compiles every core, instrument and platform-interface header with `tests/portability/poison` searched first.
+  - The poison directory holds 23 forbidden headers (`<thread>`, `<mutex>`, `<fstream>`, `<iostream>`, `<chrono>`, `<filesystem>`, `<cstdio>`, POSIX, Windows and Qt), each containing `#error`. Any of them reached directly or transitively **breaks the build**.
+  - `core_purity_gate_control` proves the gate is live: a host header must fail it (`WILL_FAIL`).
+  - `<sys/types.h>` is not poisoned, because glibc's own `<stdlib.h>` includes it underneath `<algorithm>`.
+- `databreaks_header_selfcontained` compiles every public header on its own.
+- `core_typecheck_32bit` type-checks the whole core plus the platform interfaces for a 32-bit target (`clang --target=i686-linux-gnu`, `-Werror`, with the poison directory too). It is registered when clang and GCC's libstdc++ headers are available.
+- Option `DATABREAKS_PORTABLE_INT128=ON` builds and runs **everything** on the portable integer.
+
+### 16.3 Memory before / after
+
+| Object | Engine 028 | Engine 029 |
+|---|---|---|
+| `Sequencer` | 655,264 B | 655,264 B (unchanged) |
+| `AudioPipeline<16>` | 919,840 B | 919,840 B (unchanged) |
+| `DefaultPatternBank` | 200,480 B | 200,480 B (unchanged) |
+| `MusicalClock` | 64 B | 64 B (native); `PortableInt128` is also 16 B |
+| Loader working memory | ≈ 510 KB heap allocated inside `load()` + vectors | `LoadScratch` 510,088 B **provided by the caller** (static on a target); 0 heap inside the core |
+| Saver working memory | a `std::vector` of the whole file (up to 206,026 B) | 256-byte buffer on the stack, streamed |
+| New boundary objects (optional, caller-owned) | — | `PipelineRenderer<…, 256>` 4,120 B; `InputRouter` 576 B; `QueueInputSource<256>` 4,128 B; `InputEvent` 16 B |
+| Host-only helpers | — | `OfflineAudioDevice<>` 65,584 B; `MemoryStorage<8192, 2>` 24,808 B |
+
+### 16.4 Performance before / after (host only; Release `-O3`; 4-vCPU Xeon @ 2.1 GHz VM, GCC 13.3)
+
+Engine 028 (`d0790c0`, built from a clean archive) and Engine 029 benchmarks
+were run alternately, twice each, on the same build settings.
+
+| Path | Engine 028 | Engine 029 |
+|---|---|---|
+| `sampleOfTick` (native clock) | 4.74–4.76 ns | 4.77–5.39 ns (noise; identical code on the host) |
+| Sequencer, 27 pads on every 16th, per block (16 / 128 / 1,024 / 4,096 frames) | 0.068 / 0.090–0.091 / 0.150–0.152 / 0.341–0.342 µs | 0.068 / 0.091–0.092 / 0.145–0.152 / 0.330–0.334 µs |
+| Block with a pattern switch, typical / heavy | 19.5–20.6 / 40.8–42.8 µs | 18.5–20.3 / 40.4–41.2 µs |
+| Bank store / load (typical slot) | 11.6–11.9 / 6.3–6.4 µs | 11.8 / 6.2–6.3 µs |
+| Save 16 typical patterns (79,834 B) / 4 heavy (185,286 B) | 864–889 / 2,000–2,112 µs | 847–848 / 1,924–1,972 µs |
+| **Load** 16 typical / 4 heavy | 1,192–1,229 / 2,128–2,256 µs | **1,698–1,766 / 3,063–3,082 µs (+~40 %)** |
+
+The audio path is unchanged, and saving is unchanged or slightly faster.
+
+**Loading is about 40 % slower.** It now reads through a bounds- and
+cache-checked `ByteSource` reader instead of raw pointers, and re-decodes
+events by offset instead of keeping an event buffer. It is not real-time,
+and in exchange it allocates nothing, needs no contiguous buffer and works
+on any medium. Varying the reader cache (64/128/256 B) made no measurable
+difference, so it was left at 64 B rather than tuned blindly.
+
+| Portable integer (`-DDATABREAKS_PORTABLE_INT128`, Release) | Native | Portable |
+|---|---|---|
+| `sampleOfTick` | 5.3 ns | 6.3 ns |
+| `fineAtSample` at 5·10⁹ samples (operands > 64 bits: bit-serial division) | 3.1 ns | 359.5 ns |
+| Sequencer block (256 frames, 27×16 pattern), session start | 0.10 µs | 0.17 µs |
+| Same, ~29 h into a session | 0.10 µs | 1.16 µs (+1 µs per 5,333 µs block, 0.02 %) |
+
+The portable division's slow path engages once fine-tick values exceed 64
+bits, about 26 minutes into continuous play at 48 kHz. It is correct and
+bounded, and a faster 128-by-64 division is a possible follow-up.
+
+| New boundary paths (host) | Cost |
+|---|---|
+| `PipelineRenderer` via `OfflineAudioDevice`, `Int16` | 24.3 / 19.8 ns per frame (64 / 256-frame blocks) vs 26.6 / 22.0 for direct render + conversion |
+| Input: queue push + pump + route + sequencer intake | 7.1 ns per pad event |
+| `FileStorage` save / load, 16 typical patterns | 1.2 / 2.5 ms |
+
+### 16.5 Tests: `tests/audio/engine_029.cpp`, 20 checks, all passing
+
+| Area | Checks |
+|---|---|
+| 128-bit integer | N0 constexpr semantics (`static_assert`s); N1 `+ − * / %`, comparisons and narrowing equal native `__int128` for 241,140 operand pairs (edges, every magnitude, both signs); N2 the real clock on both integers is identical (5 rates × 5 tempos, random advances up to 2³⁴ samples, tempo changes; 10,000 states × 7 queries); N3 which integer is in use |
+| Storage | S1 bytes pinned to the Engine 028 serializer; S2 streaming save into a `ByteSink`, 0 allocations; S3 `ByteSource` load into caller scratch, 0 allocations; S4 `MemoryStorage` round trip, a failed write or commit keeps the previous version, `NotFound`, invalid names; S5 read failures at 7 offsets give `ReadError` and change nothing; S6 every truncation and every third byte flipped are rejected through the `ByteSource` path; S7 `FileStorage` round trip, aborted write keeps the file, no temporary files leaked; S8 corrupted event fields give exactly `OutOfRange` |
+| Audio I/O | A1 the `Int16` device stream equals the direct render converted like the demo WAV writers, for device blocks 1/7/64/256/1000/4096; A2 conversion values and interleaving; A3 stream configuration validation; A4 0 allocations while rendering 1 s |
+| Input | I1 PadDown becomes a `LiveEvent` at its sample (sounds and is recorded), PadUp counted, buttons/encoders reach the handler, invalid pad/velocity rejected; I2 unhandled controls and a full live queue counted; I3 producer thread → `QueueInputSource` → router (TSan); I4 0 allocations |
+
+The portability gates (`core_purity`, `core_purity_gate_control`, `core_typecheck_32bit`) and the self-containment build are separate CTest entries and build targets.
+
+**Mutation checks** (each made temporarily in a scratch copy, Release build): 15 deliberate defects, all caught.
+
+| Mutation | Caught by |
+|---|---|
+| CRC trailer skips the last buffered chunk | S1, S3, S4, S7 |
+| wrong record count in the header | S1, S3, S4, S7 |
+| source-reader cache index error | S3, S4, S7 |
+| medium read errors reported as format errors | S5 |
+| per-event field validation removed | S8 |
+| `MemoryStorage` not atomic (old version erased at begin) | S4 |
+| `FileStorage` writes the final file directly (no temp + rename) | S7 |
+| 128-bit multiply drops a cross term | N1, N2 |
+| 128-bit division forgets the borrow | N1 |
+| 64-bit fast path taken when only the dividend fits | N1 |
+| 128-bit negation forgets the carry | N1, N2 |
+| `Int16` scale 32766 | A1, A2 |
+| left/right swapped when interleaving | A1, A2 |
+| velocity 128 accepted | I1 |
+| wrong pad id routed | I1 |
+
+The first version of the tests missed two:
+
+- **`reccount`.** S1 pinned the CRC-32 of the whole file *including* its correct trailer. For every valid file that is the CRC residue constant `0x2144DF1C`, so it pinned nothing. S1 now pins the body CRC and an FNV-1a-64 hash.
+- **`evcheck`.** S8 was added to pin the exact `OutOfRange` status.
+
+**Harness bug found and fixed in the new test:** I4 first failed because `check(counter == 0 && …, "<message>")` let GCC build the message string, a heap allocation, *before* evaluating the counter. The allocation count is now read into a local first.
+
+### 16.6 Verification
+
+| Check | Result |
+|---|---|
+| Default build | 49 executables (incl. 8 benchmarks and the purity gate) and the header self-containment library, **0 warnings** |
+| `ctest` (Debug) | **43/43 pass**: the 39 existing tests, `engine_029`, `core_purity`, `core_purity_gate_control` (expected to fail, and does) and `core_typecheck_32bit` |
+| `engine_029` | **20/20 checks**. `engine_028` 33, `engine_027` 30, `engine_026` 55, `engine_025` 38 and all earlier tests: passing and unchanged |
+| Release `-O3 -DNDEBUG` | **0 warnings, 43/43 pass** |
+| `-DDATABREAKS_PORTABLE_INT128=ON` (every target built on the portable integer; verified in the generated flags) | **0 warnings, 43/43 pass**; `engine_029` N3 confirms the portable type is in use |
+| ASan + UBSan (Debug) | **0 warnings, 43/43 pass**, no reports |
+| ThreadSanitizer | Engines 020–029, **no reports** |
+| 32-bit type-check of the core + platform interfaces | clean with `-Wall -Wextra -Wpedantic -Werror` (before Engine 029: one error, `__int128`) |
+| Purity gate | core, instruments and platform interfaces reach none of the 23 poisoned headers; the control (a host header) is rejected |
+| Allocations | `engine_029` S2/S3 (save/load), A4 (device render), I4 (input): 0; earlier checks still pass |
+| Reference renders | the 16 reference WAVs, the committed Engine 021 demo and the Engine 022–028 demos are byte-identical **in both the native and the portable build** |
+| DBPB | byte-identical to the Engine 028 serializer (pinned: size, body CRC, FNV-1a-64) |
+| Mutation spot checks | 15 deliberate defects, all caught (§16.5) |
+| `git diff --check` | clean |
+| FM-1 hardware | **not run, deliberately**; the 32-bit check is a type-check, not a target build |
+
+### 16.7 What did not change
+
+- Sequencer, quantizer, recorder, bank, arrangement and switching behaviour.
+- DSP.
+- The DBPB format and its bytes.
+- All Engine 019–028 tests and checks.
+- Real-time rules: no allocation and no locks on the audio path.
+
+The only edits to existing files are additive, or the internal changes listed in §16.2: the clock's integer type and template, `samplesPerTick()`, and the serializer's streaming internals.
+
+### 16.8 Remaining unknown FM-1 hardware requirements
+
+Nothing below is verified, and nothing in the code assumes it:
+
+- **MCU/SoC:** core, word size (the core is now 32-bit-clean), clock, **FPU (none / single / double precision)**. The engine is all `double`.
+- **RAM:** size and type (internal SRAM vs external SDRAM/PSRAM). The engine needs about 0.9–1.2 MB as written, plus samples at 16 B per stereo frame.
+- **Flash / storage:** internal flash size, page and erase granularity, write endurance, external flash or SD. The saved bank is up to 206 KB.
+- **Audio codec:** part, interface (I2S/TDM), sample rate(s) (the core is fixed at 48 kHz), word format, block / DMA size, and output latency.
+- **Pads:** matrix wiring, scan method and rate, velocity sensing and resolution, aftertouch.
+- **Buttons, encoders, knobs:** count, labels, wiring, debouncing.
+- **Display:** controller, interface, resolution.
+- **MIDI / USB:** presence, USB device class, MIDI DIN/TRS.
+- **Power:** brown-out behaviour (relevant to the atomic-save contract).
+- **Boot:** bootloader, update and **recovery** method.
+
+### 16.9 Remaining work
+
+- An FM-1 adapter once the facts above are documented in `docs/hardware/` with sources.
+- A `float` (or fixed-point) DSP path, if the FPU requires it. This is a behaviour change, to be done deliberately with new reference renders.
+- Sample storage as a non-owning view over raw `int16` / flash data, instead of `std::vector<StereoFrame>`.
+- `TapeMachine` and `SampleSliceMap` storage without the heap.
+- A faster 128-by-64 division if the portable clock's long-session cost matters on the target.
+- Static placement of the pipeline and the load scratch in a target memory map.
+- A cross-compiler build (an ARM GCC toolchain is not installed here). The 32-bit check is a type-check, not a target build or run.
+
+## 17. Recommended next steps (in order)
+
+1. Review Engines 019–029 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–028 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
 4. ~~Engine 024: tape processor as an `AudioEffect` inserted into the chain.~~ Done (§11). Possible follow-ups:
@@ -2557,9 +2829,15 @@ RAM budgets are unverified.
    - locate/count-in/metronome;
    - an indexed recorded-track playback if the FM-1 budget needs it.
 9. ~~Fix B2/B3 with a stateful ADSR, then B1/B4 with phase accumulators.~~ Done in Engine 022 for the new engines (§4.1); the original classes stay as references.
-10. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path.
+10. Hardware discovery as documentation only (`docs/hardware/`, with sources). No firmware layer and no flashing until there is a documented, tested recovery path. The list of facts the FM-1 adapter needs is in §16.8.
+11. ~~Engine 029: target portability boundary~~ (§16). Follow-ups (§16.9):
+   - a cross-compiler build (and, once safe and requested, a target run);
+   - a float or fixed-point DSP path if the FPU requires it;
+   - sample storage as non-owning views (int16 / flash);
+   - heap-free `TapeMachine` and `SampleSliceMap` storage;
+   - a faster portable 128-by-64 division.
 
-## 17. Change log on this branch
+## 18. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -2650,3 +2928,11 @@ RAM budgets are unverified.
   - updated `CLAUDE.md` and this report.
 
   No earlier check was changed or weakened. Clock, scheduling, recording and quantization rules, and synth, drum, effect, tape, sampler and mixer code were not changed. Engine 003 was not touched.
+- **Engine 029 commit:**
+  - added `core/sequencer/exact_int128.h`, `platform/storage.h`, `platform/audio_io.h`, `platform/input.h`, `platform/host/{memory_storage,file_storage,offline_audio_device,scripted_input}.h`, `tests/audio/engine_029.cpp`, `tests/audio/engine_029_benchmark.cpp`, `tests/portability/core_purity.cpp`, `tests/portability/gate_control.cpp` and `tests/portability/poison/` (23 forbidden-header stubs);
+  - `core/sequencer/musical_clock.h`: `BasicMusicalClock<ExactInt128>` (no `__int128` in core code), `samplesPerTick()` narrowing;
+  - `core/sequencer/pattern_io.h`: streaming save to `ByteSink`, `ByteSource` load into caller scratch, `saveTo`/`loadFrom`, `encodedSize`, `ReadError`/`NotFound`/`SaveStatus`; no `<memory>`; includes `musical_clock.h`;
+  - `CMakeLists.txt`: `engine_029` (unit) and its benchmark, the portability gates (`core_purity`, `core_purity_gate_control`, `core_typecheck_32bit`, `databreaks_header_selfcontained`) and the `DATABREAKS_PORTABLE_INT128` option;
+  - updated `CLAUDE.md` and this report.
+
+  No earlier test was changed. Sequencer behaviour, DSP, the DBPB bytes and every reference render are unchanged.

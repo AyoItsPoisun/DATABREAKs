@@ -36,11 +36,13 @@
 // tick at or before s) with sampleOfFine(f) == s exactly: a recording
 // replays on its captured sample.
 //
-// Uses unsigned/signed __int128 (GCC and Clang on 64-bit hosts).
+// Uses ExactInt128 (exact_int128.h): native __int128 where available,
+// otherwise a portable implementation with identical results (Engine 029).
 //
 // Threading: audio thread only (Sequencer::postTransport() offers a queue
 // for start/stop/tempo from one other thread).
 
+#include "exact_int128.h"
 #include "musical_time.h"
 
 #include <cmath>
@@ -48,13 +50,20 @@
 
 namespace databreaks {
 
-// 128-bit signed integer (a GCC/Clang extension on 64-bit hosts; marked
-// with __extension__ so -Wpedantic accepts this one deliberate use).
-__extension__ typedef __int128 SequencerInt128;
+// Exact 128-bit signed integer (Engine 029: exact_int128.h). The native
+// __int128 on 64-bit hosts (unchanged behaviour and speed); a portable
+// two-word implementation with identical results on 32-bit targets, where
+// __int128 does not exist.
+using SequencerInt128 = ExactInt128;
 
-class MusicalClock {
+// The clock is written against an exact 128-bit integer type `Int`
+// (Engine 029 made it a template so the native and the portable integer
+// can be compared through the real clock in one test binary). Everything
+// uses MusicalClock = BasicMusicalClock<ExactInt128>.
+template <typename Int>
+class BasicMusicalClock {
 public:
-    using i128 = SequencerInt128;
+    using i128 = Int;
 
     static constexpr std::int64_t MinMilliBpm = 20000;
     static constexpr std::int64_t MaxMilliBpm = 300000;
@@ -62,7 +71,7 @@ public:
     static constexpr int MaxSampleRate = 192000;
     static constexpr std::int64_t FinePerTick = 1024;  // Engine 026
 
-    explicit MusicalClock(int sampleRate = 48000) {
+    explicit BasicMusicalClock(int sampleRate = 48000) {
         setSampleRate(sampleRate);
     }
 
@@ -210,7 +219,9 @@ public:
 
     // Exact samples per tick as a double (for reporting only).
     double samplesPerTick() const {
-        return static_cast<double>(n()) / static_cast<double>(d());
+        // n() <= 1.15e10 and d() <= 2.9e8 fit int64 and convert exactly.
+        return static_cast<double>(static_cast<std::int64_t>(n())) /
+               static_cast<double>(static_cast<std::int64_t>(d()));
     }
 
 private:
@@ -235,5 +246,7 @@ private:
 
     static i128 ceilDiv(i128 a, i128 b) { return -floorDiv(-a, b); }
 };
+
+using MusicalClock = BasicMusicalClock<SequencerInt128>;
 
 } // namespace databreaks

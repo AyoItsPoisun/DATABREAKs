@@ -15,15 +15,16 @@ complete, independent firmware that runs on the FM-1 hardware. The device has
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–028).
+019–029).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
 target toolchain, startup code, HAL, drivers, display, pad scanning, storage,
-or boot code. Never describe these prototypes as completed, installable, or
+or boot code. Engine 029 added the target-abstraction interfaces (`platform/`)
+and host implementations of them, not an FM-1 adapter. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 028
+### Components through Engine 029
 
 | Header | Purpose | Tested by |
 |---|---|---|
@@ -46,12 +47,17 @@ flashable FM-1 firmware.
 | `core/audio/drum_event_queue.h` | `DrumEvent` and `DrumEventQueue<N>` (Engine 020); since Engine 022 an alias of `SpscRing<DrumEvent, N>` | `engine_020` (incl. a two-thread test) |
 | `core/audio/synth_event.h` | `SynthTarget`, `SynthEventType`, `SynthEvent` — moved unchanged out of `audio_pipeline.h` in Engine 025 (the pipeline includes it) | — |
 | `core/sequencer/musical_time.h` | 960 PPQ ticks, `TimeSignature`, bar/beat/tick conversion (Engine 025) | `engine_025` |
-| `core/sequencer/musical_clock.h` | `MusicalClock`: exact tick↔sample mapping in 128-bit integers, milli-BPM tempo, start/stop/reset (Engine 025); fine ticks (1/1024 tick) and `fineAtSample` for recording timestamps (Engine 026) | `engine_025`, `engine_026` |
+| `core/sequencer/musical_clock.h` | `MusicalClock`: exact tick↔sample mapping in 128-bit integers, milli-BPM tempo, start/stop/reset (Engine 025); fine ticks (1/1024 tick) and `fineAtSample` for recording timestamps (Engine 026); since Engine 029 `BasicMusicalClock<ExactInt128>` (portable to 32-bit targets) | `engine_025`, `engine_026`, `engine_029` |
+| `core/sequencer/exact_int128.h` | `PortableInt128` (two-word exact integer, `__int128` semantics) and `ExactInt128` (native where available, portable otherwise or with `DATABREAKS_PORTABLE_INT128`) (Engine 029) | `engine_029` (vs native), whole suite with the option |
 | `core/sequencer/pattern.h` | `Pattern`: 27 drum lanes × up to 256 steps (velocity, probability, microtiming) + up to 512 synth `NoteEvent`s (Engine 025); `restoreStep`/`restoreNote` for exact restore (Engine 028) | `engine_025`, `engine_028` |
 | `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025). Engine 026: records live input, plays the recorded track and live input, SPSC command and live-input queues. Engine 027: quantized playback of the recorded track (settings + 16 KB derived cache). Engine 028: pattern bank, pattern origin, sample-exact switching, song mode, bank/arrangement commands | `engine_025` (38 checks), `engine_026` (55 checks), `engine_027` (30 checks), `engine_028` (33 checks) |
 | `core/sequencer/pattern_bank.h` | `PatternBank<Banks, PerBank, StepPool, NotePool, EventPool>`: compact shared-pool storage of complete pattern states; `DefaultPatternBank` (2×8 patterns, 200,480 B); `PatternData` (Engine 028) | `engine_028` |
 | `core/sequencer/arrangement.h` | `Arrangement`: up to 64 `{pattern, repeats}` entries + end mode Stop/Loop/HoldLast (Engine 028) | `engine_028` |
-| `core/sequencer/pattern_io.h` | "DBPB" v1 save/load: explicit little-endian fields, CRC-32, full validation; not real-time (Engine 028) | `engine_028` |
+| `core/sequencer/pattern_io.h` | "DBPB" v1 save/load: explicit little-endian fields, CRC-32, full validation; not real-time (Engine 028); streaming save to a `ByteSink`, load from a `ByteSource` into caller `LoadScratch` (no heap), `saveTo`/`loadFrom` a `StorageBackend` (Engine 029) | `engine_028`, `engine_029` |
+| `platform/storage.h` | `ByteSink`, `ByteSource`, `StorageBackend` (named objects, atomic replace), `MemoryByteSource` (Engine 029) | `engine_029` |
+| `platform/audio_io.h` | `AudioStreamConfig`, `AudioRenderCallback`, `AudioDevice`, `PipelineRenderer` (chunked render + Int16/Int32/Float32 interleaved conversion) (Engine 029) | `engine_029` |
+| `platform/input.h` | `InputEvent` (pads, buttons, encoders), `InputSource`, `ControlHandler`, `QueueInputSource`, `InputRouter` (pads → `LiveEvent`) (Engine 029) | `engine_029` |
+| `platform/host/*.h` | Host implementations: `MemoryStorage` (fixed memory, fault injection), `FileStorage` (temp file + rename), `OfflineAudioDevice`, `ScriptedInputSource` (Engine 029). Host only | `engine_029` |
 | `core/sequencer/quantize.h` | `QuantizeGrid`, `QuantizeSettings`, integer quantizer: nearest grid point, strength, swing, selection, note-off option (Engine 027) | `engine_027` |
 | `core/sequencer/recorded_track.h` | `RecordedEvent` (raw fine-tick timing, capture sample/loop/epoch), `RecordedTrack`: 2,048 events, 512 per pass, 16-pass undo/redo by pass activity (Engine 026); `revision()` counter (Engine 027); pass-table export and validated `restore`/`restoreFrom` (Engine 028) | `engine_026`, `engine_027`, `engine_028` |
 | `core/sequencer/recorder.h` | `LiveEvent`, `RecordMode` (Free/Loop), `WriteMode` (Overdub/Replace), `SequencerCommand`, `Recorder` settings/state/limits (Engine 026) | `engine_026` |
@@ -222,8 +228,9 @@ voice count are independent (default 16 voices, like the manager's default).
   nothing changes until `start()`.
 - **Time:** a tick is 1/960 quarter note. Tempo is integer milli-BPM
   (20–300 BPM). Tick t is delivered at sample `ceil(x(t))`, where
-  `x(t) = (O + (t − T0)·fs·60000) / (milliBPM·960)`, computed in `__int128`:
-  no drift. Tempo changes take effect at the next tick boundary (one rounding
+  `x(t) = (O + (t − T0)·fs·60000) / (milliBPM·960)`, computed in exact
+  128-bit integers (`ExactInt128` since Engine 029; native `__int128` on
+  64-bit hosts): no drift. Tempo changes take effect at the next tick boundary (one rounding
   to 1/D sample per change). Never replace this with floating-point
   accumulation.
 - **Delivery:** the sequencer must not use `post*` (those queues have one
@@ -360,6 +367,42 @@ voice count are independent (default 16 voices, like the manager's default).
 - Full details: `docs/PROGRESS_REPORT.md` §15. Benchmark:
   `databreaks_engine_028_benchmark` (built, not a CTest test).
 
+### Engine 029 — target portability boundary (implemented, host-side only)
+
+- **Layers:** `core/` + `instruments/` (the engine) → `platform/*.h` (target
+  abstraction interfaces: storage, audio I/O, input; standard C++ only) →
+  `platform/host/*.h` (host implementations; the only new code allowed to
+  use `<cstdio>`) → an FM-1 adapter (not written: hardware unknown).
+- **Never include platform-specific headers in `core/`, `instruments/` or
+  `platform/*.h`** (`<thread>`, `<mutex>`, `<fstream>`, `<iostream>`,
+  `<chrono>`, `<filesystem>`, `<cstdio>`, POSIX/Windows/Qt). The build
+  enforces it: `databreaks_core_purity` compiles them with
+  `tests/portability/poison` first (each forbidden header is an `#error`);
+  `core_purity_gate_control` proves the gate works. Also avoid `<memory>`
+  in core headers (on hosted libstdc++ it pulls in the threading library).
+- **Every public header must compile on its own**
+  (`databreaks_header_selfcontained`).
+- **No `__int128` in core code.** Use `ExactInt128` (`exact_int128.h`):
+  native on 64-bit hosts, `PortableInt128` (bit-identical) elsewhere.
+  `cmake -DDATABREAKS_PORTABLE_INT128=ON` runs everything on the portable
+  type; `core_typecheck_32bit` type-checks the core for a 32-bit target
+  when clang is available.
+- **Storage:** core code persists only through `ByteSink` / `ByteSource` /
+  `StorageBackend`. `pattern_io::save(..., ByteSink&)` streams (no heap);
+  `load(ByteSource&, LoadScratch&, ...)` uses caller scratch (510,088 B;
+  static on a target). Backends must replace objects atomically.
+  `LoadStatus::ReadError` = medium failure, `NotFound`. The Engine 028
+  vector/pointer overloads remain (host only; they allocate).
+- **Audio:** a device calls `AudioRenderCallback::renderBlock`;
+  `PipelineRenderer` renders in ≤256-frame chunks and converts exactly like
+  the demo WAV writers. 48 kHz stereo only (the core's rate).
+- **Input:** targets produce `InputEvent`s; `InputRouter` maps pads to
+  `LiveEvent`s and hands buttons/encoders to a `ControlHandler`. Do not
+  invent FM-1 control mappings.
+- The 32-bit check is a type-check, not a target build. Nothing has run on
+  an FM-1. Full details: `docs/PROGRESS_REPORT.md` §16. Benchmark:
+  `databreaks_engine_029_benchmark`.
+
 ## Hardware constraints and safety rules
 
 - **Unknown and must not be assumed:** the FM-1's MCU/SoC, GPIO mappings,
@@ -385,6 +428,9 @@ voice count are independent (default 16 voices, like the manager's default).
 ## Layout
 
 ```
+platform/                   target abstraction interfaces: storage, audio I/O, input (029)
+platform/host/              host implementations of those interfaces (029; host only)
+tests/portability/          core purity gate (poison headers) and its control (029)
 core/audio/                 engine-wide types, mixers, tape, sampler, pads, pipeline
 core/audio/effects/         EQ, compressor, soft clipper, tape, distortion, reverb, chain
 core/sequencer/             musical time, clock, pattern, sequencer (025), recorder (026), quantize (027),
@@ -404,7 +450,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 39 tests
+ctest --test-dir build --output-on-failure          # all 43 tests (+ label portability)
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 
