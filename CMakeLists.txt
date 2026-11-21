@@ -49,6 +49,7 @@ add_executable(databreaks_engine_028 tests/audio/engine_028.cpp)
 add_executable(databreaks_engine_028_render tests/audio/engine_028_render.cpp)
 add_executable(databreaks_engine_029 tests/audio/engine_029.cpp)
 add_executable(databreaks_engine_030 tests/audio/engine_030.cpp)
+add_executable(databreaks_engine_031 tests/audio/engine_031.cpp)
 
 # Engine 023 host benchmark: reports measurements only; not a CTest test.
 add_executable(databreaks_engine_023_benchmark
@@ -161,6 +162,7 @@ foreach(target
     databreaks_engine_029
     databreaks_engine_029_benchmark
     databreaks_engine_030
+    databreaks_engine_031
     databreaks_dsp_unit_tests
     databreaks_tape_test
     databreaks_transport_test
@@ -207,6 +209,7 @@ foreach(name
     engine_028
     engine_029
     engine_030
+    engine_031
     tape_test
     transport_test
     tape_character_test
@@ -278,6 +281,7 @@ file(GLOB DATABREAKS_PUBLIC_HEADERS
     ${PROJECT_SOURCE_DIR}/core/audio/*.h
     ${PROJECT_SOURCE_DIR}/core/audio/effects/*.h
     ${PROJECT_SOURCE_DIR}/core/sequencer/*.h
+    ${PROJECT_SOURCE_DIR}/core/target/*.h
     ${PROJECT_SOURCE_DIR}/instruments/synthesizers/*.h
     ${PROJECT_SOURCE_DIR}/platform/*.h
     ${PROJECT_SOURCE_DIR}/platform/host/*.h)

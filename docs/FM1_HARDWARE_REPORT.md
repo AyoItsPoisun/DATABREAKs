@@ -112,17 +112,17 @@ labelled with its evidence class.
 
 ## 3. DATABREAKs current requirements
 
-These are host measurements (x86-64, LP64) pinned by `tests/audio/engine_030.cpp`. 32-bit layout estimates (i686 with 8-byte-aligned doubles, a proxy for ARM EABI-like layouts, *not* pi32v2) are from Engine 029. With `-DDATABREAKS_PORTABLE_INT128=ON` (no native `__int128`, as on a 32-bit target), `Sequencer` and `AudioPipeline<16>` are 8 bytes smaller (655,256 / 919,832) because the clock is 8- rather than 16-byte aligned; `engine_030` pins both layouts.
+These are host measurements (x86-64, LP64) pinned by `tests/audio/engine_030.cpp`. **Updated for Engine 031:** the zero-initialised `PatternBank` slot storage is 640 B smaller, so the bank, `Sequencer`, `AudioPipeline` and `LoadScratch` figures below are 640 B lower than in the original Engine 030 report; the 32-bit column is unchanged from Engine 029. The FM-1 resource profile and its RAM model are in `core/target/` and `docs/PROGRESS_REPORT.md` §18. 32-bit layout estimates (i686 with 8-byte-aligned doubles, a proxy for ARM EABI-like layouts, *not* pi32v2) are from Engine 029. With `-DDATABREAKS_PORTABLE_INT128=ON` (no native `__int128`, as on a 32-bit target), `Sequencer` and `AudioPipeline<16>` are 8 bytes smaller (654,616 / 919,192) because the clock is 8- rather than 16-byte aligned; `engine_030` pins both layouts.
 
 ### 3.1 RAM
 
 | Object | Host bytes | 32-bit estimate | Lifetime |
 |---|---|---|---|
-| **`AudioPipeline<16>`** | **919,840** | 874,808 | permanent |
-| ↳ `Sequencer` | 655,264 | 632,072 | permanent |
+| **`AudioPipeline<16>`** | **919,200** | 874,808 | permanent |
+| ↳ `Sequencer` | 654,624 | 632,072 | permanent |
 |   ↳ working `Pattern` (dense 27 × 256 steps + 512 notes) | 127,024 | 127,024 | permanent |
 |   ↳ `Recorder` incl. `RecordedTrack` (2,048 × 88 B events) | 201,152 (track 182,584) | 182,512 (track) | permanent |
-|   ↳ `DefaultPatternBank` (pools: 8,192 steps, 1,024 notes, 2,048 events) | 200,480 | 199,960 | permanent (persisted) |
+|   ↳ `DefaultPatternBank` (pools: 8,192 steps, 1,024 notes, 2,048 events) | 199,840 | 199,960 | permanent (persisted) |
 |   ↳ per-block event buffer (2,816 × 32 B) | 90,112 | — | permanent |
 |   ↳ quantize cache | 16,384 | 16,384 | permanent |
 |   ↳ arrangement | 272 | — | permanent (persisted) |
@@ -130,8 +130,8 @@ These are host measurements (x86-64, LP64) pinned by `tests/audio/engine_030.cpp
 | ↳ `DrumEngine<16>` | 45,544 | 24,440 | permanent |
 | ↳ `TapeEffect` | 10,080 | — | permanent |
 | `TapeMachine` heap delay lines (allocated at construction) | **268,800** | 268,800 | permanent |
-| **Runtime total** (pipeline + tape heap) | **1,188,640** | **≈ 1,143,600** | |
-| `pattern_io::LoadScratch` | 510,088 | 509,496 | only while loading (caller-provided) |
+| **Runtime total** (pipeline + tape heap) | **1,188,000** | **≈ 1,143,600** | |
+| `pattern_io::LoadScratch` | 509,448 | 509,496 | only while loading (caller-provided) |
 | Sample audio | **768,000 bytes per second** of stereo (16-byte double frames, 48 kHz) | same | while loaded |
 
 ### 3.2 Flash / code
@@ -139,7 +139,7 @@ These are host measurements (x86-64, LP64) pinned by `tests/audio/engine_030.cpp
 | Item | Value |
 |---|---|
 | Engine code, `-Os` proxy | ≈ 57.5 KB `.text` on x86-64; ≈ 76 KB on i686, for a TU that instantiates the full pipeline, rendering, the sequencer and DBPB save/load. Not pi32v2 code. |
-| Static-placement finding | A *statically* allocated `DefaultPatternBank` is constant-initialised: its records have non-zero defaults (velocity 100, …), so the compiler places it in **`.data`, costing ≈ 200 KB of flash image AND 200 KB of RAM**, copied at boot. `AudioPipeline` and `LoadScratch` land in `.bss` only because their constructors run at start-up. Measured with `nm` on the proxy build. |
+| Static-placement finding | A *statically* allocated `DefaultPatternBank` is constant-initialised: its records have non-zero defaults (velocity 100, …), so the compiler places it in **`.data`, costing ≈ 200 KB of flash image AND 200 KB of RAM**, copied at boot. **Fixed in Engine 031:** a default bank is now all zero bytes and a static one is placed in `.bss` (verified with `nm`, GCC and Clang). Still in initialised data when declared as standalone statics: `RecordedTrack` (182,584 B), `Recorder` (201,152 B), `DrumEngine<16>` (45,544 B), `Arrangement` (272 B); inside `Sequencer` / `AudioPipeline` / `LoadScratch` / `PatternData` they are in `.bss` with GCC and Clang because those classes have run-time constructors (the pi32v2 toolchain is unchecked). `AudioPipeline` and `LoadScratch` land in `.bss` only because their constructors run at start-up. Measured with `nm` on the proxy build. |
 | Saved bank (DBPB) | typically ≈ 5 KB per pattern; **206,026 bytes worst case** (all pools full; pinned by `engine_030` R3) |
 
 ### 3.3 Numeric format, rate, voices, input

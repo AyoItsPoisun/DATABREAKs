@@ -44,6 +44,8 @@
 #include "../../core/sequencer/recorded_track.h"
 #include "../../core/sequencer/recorder.h"
 #include "../../core/sequencer/sequencer.h"
+#include "../../core/target/resource_model.h"
+#include "../../core/target/target_profile.h"
 #include "../../instruments/synthesizers/fm_synth.h"
 #include "../../instruments/synthesizers/mono_synth.h"
 #include "../../instruments/synthesizers/poly_synth.h"

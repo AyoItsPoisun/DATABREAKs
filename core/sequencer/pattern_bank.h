@@ -32,6 +32,15 @@
 // Threading: the Sequencer owns its bank on the audio thread. A standalone
 // bank (e.g. one being loaded from a file) may be used by any single
 // thread. No allocation, no locks.
+//
+// Zero-initialised storage (Engine 031): a default-constructed bank is
+// ALL ZERO BYTES. Records default to zero (store() writes every field
+// before a record is used, and records past a pool's used count are never
+// read), and each slot's metadata is stored so that zero bytes decode to
+// the empty default slot (see SlotStore). A static bank is therefore placed
+// in .bss, not in initialised data: on a microcontroller it costs no flash
+// image and no start-up copy. Behaviour and the file format are unchanged
+// (tests/audio/engine_031.cpp compares against Engine 030 fingerprints).
 
 #include "pattern.h"
 #include "quantize.h"
@@ -59,27 +68,29 @@ public:
     static_assert(Capacity <= 65535, "pattern ids are 16-bit in the file format");
 
     // Packed storage records (explicit fields; see pattern_io.h for the
-    // on-disk format, which is separate and endian-independent).
+    // on-disk format, which is separate and endian-independent). Every
+    // field defaults to zero so that the pools are zero-initialised; the
+    // bank writes every field of a record before it is used.
     struct StepRecord {
         std::uint8_t pad = 0;
         std::uint8_t step = 0;
         std::uint8_t enabled = 0;
-        std::uint8_t velocity = 100;
-        std::uint8_t probability = 100;
+        std::uint8_t velocity = 0;
+        std::uint8_t probability = 0;
         std::int16_t microTicks = 0;
     };
     struct NoteRecord {
-        std::uint8_t enabled = 1;
-        SynthTarget target = SynthTarget::Poly;
-        std::uint8_t note = 60;
-        std::uint8_t velocity = 100;
-        std::uint8_t probability = 100;
+        std::uint8_t enabled = 0;
+        SynthTarget target = SynthTarget{};
+        std::uint8_t note = 0;
+        std::uint8_t velocity = 0;
+        std::uint8_t probability = 0;
         std::int32_t startTick = 0;
-        std::int32_t lengthTicks = 240;
+        std::int32_t lengthTicks = 0;
     };
     struct EventRecord {  // 56 bytes
-        RecordedEvent::Kind kind = RecordedEvent::Kind::Drum;
-        SynthTarget target = SynthTarget::Mono;
+        RecordedEvent::Kind kind = RecordedEvent::Kind{};
+        SynthTarget target = SynthTarget{};
         std::uint8_t value = 0;
         std::uint8_t velocity = 0;
         std::uint8_t pending = 0;
@@ -94,11 +105,15 @@ public:
         std::uint64_t sequence = 0;
     };
 
+    // Shape of an empty slot (with TimeSignature{}: 4/4, one bar of 16ths).
+    static constexpr int DefaultBars = 1;
+    static constexpr std::int64_t DefaultStepTicks = TicksPerQuarter / 4;
+
     struct SlotInfo {
         bool used = false;
         TimeSignature timeSignature{};
-        int bars = 1;
-        std::int64_t stepTicks = TicksPerQuarter / 4;
+        int bars = DefaultBars;
+        std::int64_t stepTicks = DefaultStepTicks;
         QuantizeSettings quantize{};
         std::size_t steps = 0;
         std::size_t notes = 0;
@@ -124,12 +139,12 @@ public:
     SlotInfo info(int id) const {
         SlotInfo r;
         if (!validId(id)) return r;
-        const Slot& s = slots_[static_cast<std::size_t>(id)];
+        const SlotStore& s = slots_[static_cast<std::size_t>(id)];
         r.used = s.used;
-        r.timeSignature = s.timeSignature;
-        r.bars = s.bars;
-        r.stepTicks = s.stepTicks;
-        r.quantize = s.quantize;
+        r.timeSignature = s.timeSignature();
+        r.bars = s.bars();
+        r.stepTicks = s.stepTicks();
+        r.quantize = s.quantize();
         r.steps = s.stepCount;
         r.notes = s.noteCount;
         r.events = s.eventCount;
@@ -139,7 +154,7 @@ public:
 
     std::size_t usedCount() const {
         std::size_t n = 0;
-        for (const Slot& s : slots_) n += s.used ? 1 : 0;
+        for (const SlotStore& s : slots_) n += s.used ? 1 : 0;
         return n;
     }
     // Lowest empty slot, or -1.
@@ -173,7 +188,7 @@ public:
     bool store(int id, const Pattern& pattern, const RecordedTrack& track,
                const QuantizeSettings& quantize) {
         if (!validId(id) || !quantize.valid()) return false;
-        Slot& s = slots_[static_cast<std::size_t>(id)];
+        SlotStore& s = slots_[static_cast<std::size_t>(id)];
         const std::size_t steps = stepsNeeded(pattern);
         const std::size_t notes = pattern.noteCount();
         const std::size_t events = track.size();
@@ -221,12 +236,10 @@ public:
         for (std::size_t i = 0; i < events; ++i) events_[eventsUsed_++] = pack(track.at(i));
         s.eventCount = events;
         s.passCount = track.passCount();
-        for (std::size_t i = 0; i < s.passCount; ++i) s.passes[i] = track.pass(i);
-        s.nextPassId = track.nextPassId();
-        s.timeSignature = pattern.timeSignature();
-        s.bars = pattern.bars();
-        s.stepTicks = pattern.stepTicks();
-        s.quantize = quantize;
+        for (std::size_t i = 0; i < s.passCount; ++i) s.setPass(i, track.pass(i));
+        s.setNextPassId(track.nextPassId());
+        s.setShape(pattern.timeSignature(), pattern.bars(), pattern.stepTicks());
+        s.setQuantize(quantize);
         s.used = true;
         return true;
     }
@@ -235,8 +248,8 @@ public:
     // empty default pattern). Returns false for an invalid id.
     bool load(int id, Pattern& pattern, RecordedTrack& track, QuantizeSettings& quantize) const {
         if (!validId(id)) return false;
-        const Slot& s = slots_[static_cast<std::size_t>(id)];
-        pattern.configure(s.timeSignature, s.bars, s.stepTicks);
+        const SlotStore& s = slots_[static_cast<std::size_t>(id)];
+        pattern.configure(s.timeSignature(), s.bars(), s.stepTicks());
         pattern.clear();
         for (std::size_t i = 0; i < s.stepCount; ++i) {
             const StepRecord& r = steps_[s.stepOffset + i];
@@ -261,9 +274,11 @@ public:
         }
         // Unpacked straight into the track (no intermediate buffer).
         const EventRecord* records = events_.data() + s.eventOffset;
+        std::array<RecordedTrack::PassState, RecordedTrack::MaxPasses> passes{};
+        for (std::size_t i = 0; i < passes.size(); ++i) passes[i] = s.pass(i);
         track.restoreFrom(s.eventCount, [records](std::size_t i) { return unpack(records[i]); },
-                          s.passes.data(), s.passCount, s.nextPassId);
-        quantize = s.quantize;
+                          passes.data(), s.passCount, s.nextPassId());
+        quantize = s.quantize();
         return true;
     }
 
@@ -274,7 +289,7 @@ public:
     bool erase(int id) {
         if (!validId(id)) return false;
         release(static_cast<std::size_t>(id));
-        slots_[static_cast<std::size_t>(id)] = Slot{};
+        slots_[static_cast<std::size_t>(id)] = SlotStore{};
         return true;
     }
 
@@ -282,10 +297,10 @@ public:
     // history) and keeps the shape and quantize settings; the slot is used.
     bool clearContents(int id) {
         if (!validId(id)) return false;
-        Slot& s = slots_[static_cast<std::size_t>(id)];
+        SlotStore& s = slots_[static_cast<std::size_t>(id)];
         release(static_cast<std::size_t>(id));
         s.passCount = 0;
-        s.nextPassId = 1;
+        s.setNextPassId(1);
         s.used = true;
         return true;
     }
@@ -296,8 +311,8 @@ public:
     bool copy(int src, int dst) {
         if (!validId(src) || !validId(dst)) return false;
         if (src == dst) return true;
-        const Slot& a = slots_[static_cast<std::size_t>(src)];
-        Slot& b = slots_[static_cast<std::size_t>(dst)];
+        const SlotStore& a = slots_[static_cast<std::size_t>(src)];
+        SlotStore& b = slots_[static_cast<std::size_t>(dst)];
         if (!a.used) return erase(dst);
         if (stepsUsed_ - b.stepCount + a.stepCount > StepCapacity ||
             notesUsed_ - b.noteCount + a.noteCount > NoteCapacity ||
@@ -306,8 +321,8 @@ public:
             return false;
         }
         release(static_cast<std::size_t>(dst));  // may move src's ranges
-        const Slot& s = slots_[static_cast<std::size_t>(src)];
-        Slot copySlot = s;
+        const SlotStore& s = slots_[static_cast<std::size_t>(src)];
+        SlotStore copySlot = s;
         copySlot.stepOffset = stepsUsed_;
         for (std::size_t i = 0; i < s.stepCount; ++i) steps_[stepsUsed_++] = steps_[s.stepOffset + i];
         copySlot.noteOffset = notesUsed_;
@@ -335,24 +350,22 @@ public:
         if (!validId(id)) return false;
         Pattern probe;  // validation only (no allocation: a local object)
         if (!probe.configure(ts, bars, stepTicks)) return false;
-        Slot& s = slots_[static_cast<std::size_t>(id)];
-        s.timeSignature = ts;
-        s.bars = bars;
-        s.stepTicks = stepTicks;
+        SlotStore& s = slots_[static_cast<std::size_t>(id)];
+        s.setShape(ts, bars, stepTicks);
         s.used = true;
         return true;
     }
 
     bool setQuantize(int id, const QuantizeSettings& q) {
         if (!validId(id) || !q.valid()) return false;
-        slots_[static_cast<std::size_t>(id)].quantize = q;
+        slots_[static_cast<std::size_t>(id)].setQuantize(q);
         slots_[static_cast<std::size_t>(id)].used = true;
         return true;
     }
 
     // Removes every pattern.
     void clearAll() {
-        for (Slot& s : slots_) s = Slot{};
+        for (SlotStore& s : slots_) s = SlotStore{};
         stepsUsed_ = notesUsed_ = eventsUsed_ = 0;
     }
 
@@ -367,9 +380,9 @@ public:
         return validId(id) ? events_.data() + slots_[static_cast<std::size_t>(id)].eventOffset : nullptr;
     }
     RecordedTrack::PassState passState(int id, std::size_t i) const {
-        return slots_[static_cast<std::size_t>(id)].passes[i];
+        return slots_[static_cast<std::size_t>(id)].pass(i);
     }
-    std::uint32_t nextPassId(int id) const { return slots_[static_cast<std::size_t>(id)].nextPassId; }
+    std::uint32_t nextPassId(int id) const { return slots_[static_cast<std::size_t>(id)].nextPassId(); }
 
     static bool isDefault(const DrumStep& d) {
         const DrumStep z{};
@@ -423,21 +436,88 @@ public:
     }
 
 private:
-    struct Slot {
+    // One slot's metadata, stored so that ALL-ZERO BYTES decode to the empty
+    // default slot (unused; 4/4, one bar of 16ths; QuantizeSettings{}; no
+    // data; next pass id 1; pass-table entries {0, active}). Fields whose
+    // default is not zero are stored XOR their default: an exact, reversible
+    // encoding of every value, so nothing observable changes.
+    struct SlotStore {
         bool used = false;
-        TimeSignature timeSignature{};
-        int bars = 1;
-        std::int64_t stepTicks = TicksPerQuarter / 4;
-        QuantizeSettings quantize{};
         std::size_t stepOffset = 0, stepCount = 0;
         std::size_t noteOffset = 0, noteCount = 0;
         std::size_t eventOffset = 0, eventCount = 0;
-        std::array<RecordedTrack::PassState, RecordedTrack::MaxPasses> passes{};
         std::size_t passCount = 0;
-        std::uint32_t nextPassId = 1;
+
+        TimeSignature timeSignature() const {
+            TimeSignature t;
+            t.numerator = numeratorX_ ^ TimeSignature{}.numerator;
+            t.denominator = denominatorX_ ^ TimeSignature{}.denominator;
+            return t;
+        }
+        int bars() const { return barsX_ ^ DefaultBars; }
+        std::int64_t stepTicks() const { return stepTicksX_ ^ DefaultStepTicks; }
+        void setShape(TimeSignature ts, int bars, std::int64_t stepTicks) {
+            numeratorX_ = ts.numerator ^ TimeSignature{}.numerator;
+            denominatorX_ = ts.denominator ^ TimeSignature{}.denominator;
+            barsX_ = bars ^ DefaultBars;
+            stepTicksX_ = stepTicks ^ DefaultStepTicks;
+        }
+
+        QuantizeSettings quantize() const {
+            const QuantizeSettings d{};
+            QuantizeSettings q;
+            q.grid = static_cast<QuantizeGrid>(gridX_ ^ static_cast<std::uint8_t>(d.grid));
+            q.strength = strengthX_ ^ d.strength;
+            q.swing = swingX_ ^ d.swing;
+            q.targets = targetsX_ ^ d.targets;
+            q.drumLanes = drumLanesX_ ^ d.drumLanes;
+            q.quantizeNoteOff = noteOffX_ != d.quantizeNoteOff;
+            return q;
+        }
+        void setQuantize(const QuantizeSettings& q) {
+            const QuantizeSettings d{};
+            gridX_ = static_cast<std::uint8_t>(static_cast<std::uint8_t>(q.grid) ^
+                                               static_cast<std::uint8_t>(d.grid));
+            strengthX_ = q.strength ^ d.strength;
+            swingX_ = q.swing ^ d.swing;
+            targetsX_ = q.targets ^ d.targets;
+            drumLanesX_ = q.drumLanes ^ d.drumLanes;
+            noteOffX_ = q.quantizeNoteOff != d.quantizeNoteOff;
+        }
+
+        std::uint32_t nextPassId() const { return nextPassIdX_ ^ 1u; }
+        void setNextPassId(std::uint32_t id) { nextPassIdX_ = id ^ 1u; }
+
+        RecordedTrack::PassState pass(std::size_t i) const {
+            const RecordedTrack::PassState d{};
+            RecordedTrack::PassState p;
+            p.id = passIds_[i] ^ d.id;
+            p.active = passActiveX_[i] != d.active;
+            return p;
+        }
+        void setPass(std::size_t i, RecordedTrack::PassState p) {
+            const RecordedTrack::PassState d{};
+            passIds_[i] = p.id ^ d.id;
+            passActiveX_[i] = p.active != d.active;
+        }
+
+    private:
+        int numeratorX_ = 0;
+        int denominatorX_ = 0;
+        int barsX_ = 0;
+        std::int64_t stepTicksX_ = 0;
+        std::uint8_t gridX_ = 0;
+        int strengthX_ = 0;
+        int swingX_ = 0;
+        unsigned targetsX_ = 0;
+        std::uint32_t drumLanesX_ = 0;
+        bool noteOffX_ = false;
+        std::uint32_t nextPassIdX_ = 0;
+        std::array<std::uint32_t, RecordedTrack::MaxPasses> passIds_{};
+        std::array<bool, RecordedTrack::MaxPasses> passActiveX_{};
     };
 
-    std::array<Slot, Capacity> slots_{};
+    std::array<SlotStore, Capacity> slots_{};
     std::array<StepRecord, StepCapacity> steps_{};
     std::array<NoteRecord, NoteCapacity> notes_{};
     std::array<EventRecord, EventCapacity> events_{};
@@ -449,23 +529,23 @@ private:
     // Frees a slot's pool ranges, compacting each pool and fixing the
     // offsets of the slots stored after it. The slot's counts become 0.
     void release(std::size_t id) {
-        Slot& s = slots_[id];
-        removeRange(steps_, stepsUsed_, s.stepOffset, s.stepCount, &Slot::stepOffset);
-        removeRange(notes_, notesUsed_, s.noteOffset, s.noteCount, &Slot::noteOffset);
-        removeRange(events_, eventsUsed_, s.eventOffset, s.eventCount, &Slot::eventOffset);
+        SlotStore& s = slots_[id];
+        removeRange(steps_, stepsUsed_, s.stepOffset, s.stepCount, &SlotStore::stepOffset);
+        removeRange(notes_, notesUsed_, s.noteOffset, s.noteCount, &SlotStore::noteOffset);
+        removeRange(events_, eventsUsed_, s.eventOffset, s.eventCount, &SlotStore::eventOffset);
         s.stepCount = s.noteCount = s.eventCount = 0;
         s.stepOffset = s.noteOffset = s.eventOffset = 0;
     }
 
     template <typename Pool>
     void removeRange(Pool& pool, std::size_t& used, std::size_t offset, std::size_t count,
-                     std::size_t Slot::*field) {
+                     std::size_t SlotStore::*field) {
         if (count == 0) return;
         std::copy(pool.begin() + static_cast<std::ptrdiff_t>(offset + count),
                   pool.begin() + static_cast<std::ptrdiff_t>(used),
                   pool.begin() + static_cast<std::ptrdiff_t>(offset));
         used -= count;
-        for (Slot& other : slots_) {
+        for (SlotStore& other : slots_) {
             if (other.*field > offset) other.*field -= count;
         }
     }

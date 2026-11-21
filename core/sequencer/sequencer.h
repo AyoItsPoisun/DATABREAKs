@@ -113,6 +113,10 @@ public:
 
     static constexpr std::size_t MaxTransitionsPerBlock = 64;
 
+    // Entries of the per-block event buffer (see EventBufferSize below);
+    // read by the resource model (core/target/resource_model.h, Engine 031).
+    static constexpr std::size_t eventBufferCapacity() { return EventBufferSize; }
+
     explicit Sequencer(int sampleRate = 48000) : clock_(sampleRate) {
         bank_.store(0, pattern_, recorder_.track_, quantize_);  // pattern 0 is active
     }

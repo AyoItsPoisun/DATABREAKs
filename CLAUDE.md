@@ -19,7 +19,7 @@ from inferences and unknowns, with sources.
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–030).
+019–031).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -28,13 +28,13 @@ or boot code. Engine 029 added the target-abstraction interfaces (`platform/`)
 and host implementations of them, not an FM-1 adapter. Never describe these prototypes as completed, installable, or
 flashable FM-1 firmware.
 
-### Components through Engine 029
+### Components through Engine 031
 
 | Header | Purpose | Tested by |
 |---|---|---|
 | `core/audio/audio_engine.h` | 48 kHz stereo constants, `StereoFrame`, `midiToHz`, `clampAudio` | `dsp_unit_tests` |
 | `core/audio/mixer.h` | `StereoMixer` (master gain + hard clip). Since Engine 021 it is the master stage of `AudioPipeline` | `dsp_unit_tests`, `engine_021` |
-| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents>`: the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023, tape added in Engine 024), then the `StereoMixer` master stage; frame-accurate queued synth note events; audio-thread scheduled synth events and the sequencer (Engine 025) | `engine_021` (17), `engine_022` (29), `engine_023` (48), `engine_024` (35), `engine_025` (38), the render demos |
+| `core/audio/audio_pipeline.h` | `AudioPipeline<DrumVoices, DrumEvents, SynthEvents, FmVoices = 4, PolyVoices = 8>` (the last two since Engine 031): the unified host render path — drums (Engine 021) plus mono, FM and poly synth sources (Engine 022), each added into a bus at its own level, then the effects chain (Engine 023, tape added in Engine 024), then the `StereoMixer` master stage; frame-accurate queued synth note events; audio-thread scheduled synth events and the sequencer (Engine 025) | `engine_021` (17), `engine_022` (29), `engine_023` (48), `engine_024` (35), `engine_025` (38), the render demos |
 | `core/audio/layering_mixer.h` | `LayeringMixer`: mono + FM + poly layer volumes, master | render demos 003/004 only |
 | `instruments/synthesizers/{mono,fm,poly}_synth.h`, `synth_parameters.h` | Original `MonoSynth`, `FMSynth`, `PolySynth` and stateless `calculateEnvelope` (Engines 002–004). **Unchanged** (findings B1–B4 still apply to them) so the 002–004 reference renders stay byte-identical | `dsp_unit_tests`, render demos 002–004 |
 | `instruments/synthesizers/synth_voices.h` | Stateful `AdsrEnvelope`, `MonoVoice`, `FmVoice`, `PolyVoice`: same parameter structs and formulas, with phase accumulators and stateful envelopes (fix B1–B4); `sanitized()` parameter guards (Engine 022) | `engine_022` (matches the originals to ~1e-12) |
@@ -55,13 +55,15 @@ flashable FM-1 firmware.
 | `core/sequencer/exact_int128.h` | `PortableInt128` (two-word exact integer, `__int128` semantics) and `ExactInt128` (native where available, portable otherwise or with `DATABREAKS_PORTABLE_INT128`) (Engine 029) | `engine_029` (vs native), whole suite with the option |
 | `core/sequencer/pattern.h` | `Pattern`: 27 drum lanes × up to 256 steps (velocity, probability, microtiming) + up to 512 synth `NoteEvent`s (Engine 025); `restoreStep`/`restoreNote` for exact restore (Engine 028) | `engine_025`, `engine_028` |
 | `core/sequencer/sequencer.h` | `Sequencer`: plays a Pattern into sample-exact `SequencerEvent`s; deterministic probability; SPSC transport commands (Engine 025). Engine 026: records live input, plays the recorded track and live input, SPSC command and live-input queues. Engine 027: quantized playback of the recorded track (settings + 16 KB derived cache). Engine 028: pattern bank, pattern origin, sample-exact switching, song mode, bank/arrangement commands | `engine_025` (38 checks), `engine_026` (55 checks), `engine_027` (30 checks), `engine_028` (33 checks) |
-| `core/sequencer/pattern_bank.h` | `PatternBank<Banks, PerBank, StepPool, NotePool, EventPool>`: compact shared-pool storage of complete pattern states; `DefaultPatternBank` (2×8 patterns, 200,480 B); `PatternData` (Engine 028) | `engine_028` |
+| `core/sequencer/pattern_bank.h` | `PatternBank<Banks, PerBank, StepPool, NotePool, EventPool>`: compact shared-pool storage of complete pattern states; `DefaultPatternBank` (2×8 patterns, 199,840 B); `PatternData` (Engine 028). Since Engine 031 a default bank is all zero bytes (static instances go to `.bss`), behaviour unchanged | `engine_028`, `engine_031` |
 | `core/sequencer/arrangement.h` | `Arrangement`: up to 64 `{pattern, repeats}` entries + end mode Stop/Loop/HoldLast (Engine 028) | `engine_028` |
 | `core/sequencer/pattern_io.h` | "DBPB" v1 save/load: explicit little-endian fields, CRC-32, full validation; not real-time (Engine 028); streaming save to a `ByteSink`, load from a `ByteSource` into caller `LoadScratch` (no heap), `saveTo`/`loadFrom` a `StorageBackend` (Engine 029) | `engine_028`, `engine_029` |
 | `platform/storage.h` | `ByteSink`, `ByteSource`, `StorageBackend` (named objects, atomic replace), `MemoryByteSource` (Engine 029) | `engine_029` |
 | `platform/audio_io.h` | `AudioStreamConfig`, `AudioRenderCallback`, `AudioDevice`, `PipelineRenderer` (chunked render + Int16/Int32/Float32 interleaved conversion) (Engine 029) | `engine_029` |
 | `platform/input.h` | `InputEvent` (pads, buttons, encoders), `InputSource`, `ControlHandler`, `QueueInputSource`, `InputRouter` (pads → `LiveEvent`) (Engine 029) | `engine_029` |
 | `platform/host/*.h` | Host implementations: `MemoryStorage` (fixed memory, fault injection), `FileStorage` (temp file + rename), `OfflineAudioDevice`, `ScriptedInputSource` (Engine 029). Host only | `engine_029` |
+| `core/target/target_profile.h` | `HostProfile` and `Fm1Profile`: every target capacity and the RAM budget in one place, each FM-1 value tagged `Verified` / `Configured` / `Conservative` (Engine 031) | `engine_031` |
+| `core/target/resource_model.h` | `resourceReport<Profile>()`: constexpr RAM accounting, each row MEASURED / MODELLED / HOST-SIZED / EXCLUDED; `static_assert`s that `HostProfile` equals the engine, that the host decomposition is exact, and that the FM-1 model fits its budget (Engine 031) | `engine_031` |
 | `core/sequencer/quantize.h` | `QuantizeGrid`, `QuantizeSettings`, integer quantizer: nearest grid point, strength, swing, selection, note-off option (Engine 027) | `engine_027` |
 | `core/sequencer/recorded_track.h` | `RecordedEvent` (raw fine-tick timing, capture sample/loop/epoch), `RecordedTrack`: 2,048 events, 512 per pass, 16-pass undo/redo by pass activity (Engine 026); `revision()` counter (Engine 027); pass-table export and validated `restore`/`restoreFrom` (Engine 028) | `engine_026`, `engine_027`, `engine_028` |
 | `core/sequencer/recorder.h` | `LiveEvent`, `RecordMode` (Free/Loop), `WriteMode` (Overdub/Replace), `SequencerCommand`, `Recorder` settings/state/limits (Engine 026) | `engine_026` |
@@ -331,7 +333,7 @@ voice count are independent (default 16 voices, like the manager's default).
   pattern: `pattern()`, `recorder().track()`, `quantizeSettings()`). All
   patterns live compactly in `bank()` (`DefaultPatternBank`: 16 slots,
   shared pools of 8,192 sparse steps, 1,024 notes, 2,048 packed events;
-  200,480 B). Never give each pattern its own `Pattern` + `RecordedTrack`
+  199,840 B since Engine 031). Never give each pattern its own `Pattern` + `RecordedTrack`
   (~310 KB each). The bank's copy of the active slot is refreshed on every
   switch away and by `commitActivePattern()`.
 - **IDs:** stable, `bank × 8 + slot`, 0..15. Every operation validates and
@@ -362,7 +364,7 @@ voice count are independent (default 16 voices, like the manager's default).
   field in `pattern_io.h`, CRC-32, strict validation, all-or-nothing). NOT
   real-time: save/load outside the audio callback; `loadBankState()` only
   while stopped. Never write C++ structs as raw bytes.
-- **Never put an `AudioPipeline` (919,840 B) or `Sequencer` (655,264 B) on
+- **Never put an `AudioPipeline` (919,200 B) or `Sequencer` (654,624 B) on
   the stack**: use static or heap storage (ASan overflowed the 8 MB stack
   with ten pipelines in `engine_021`, now heap-allocated).
 - `Sequencer` is now 655,264 bytes (+225,936). The per-block event buffer
@@ -393,7 +395,7 @@ voice count are independent (default 16 voices, like the manager's default).
   when clang is available.
 - **Storage:** core code persists only through `ByteSink` / `ByteSource` /
   `StorageBackend`. `pattern_io::save(..., ByteSink&)` streams (no heap);
-  `load(ByteSource&, LoadScratch&, ...)` uses caller scratch (510,088 B;
+  `load(ByteSource&, LoadScratch&, ...)` uses caller scratch (509,448 B;
   static on a target). Backends must replace objects atomically.
   `LoadStatus::ReadError` = medium failure, `NotFound`. The Engine 028
   vector/pointer overloads remain (host only; they allocate).
@@ -407,6 +409,36 @@ voice count are independent (default 16 voices, like the manager's default).
   an FM-1. Full details: `docs/PROGRESS_REPORT.md` §16. Benchmark:
   `databreaks_engine_029_benchmark`.
 
+### Engine 031 — FM-1 resource profile and RAM accounting (implemented, host-side only)
+
+- **Target capacities live in `core/target/target_profile.h`**, nowhere
+  else. `HostProfile` is the existing engine (static_asserted value for
+  value: changing it fails the build, it does not change the engine).
+  `Fm1Profile` is DATABREAKs' FM-1 choice. Tag every new FM-1 value with
+  its `Evidence`; never mark a choice or an inference `Verified`.
+- **`core/target/resource_model.h`** computes the RAM report for a profile.
+  Keep its basis labels honest: MEASURED = a real C++ object (`sizeof` /
+  counted heap); MODELLED = capacity × measured element size for a class
+  that is NOT yet parameterised; HOST-SIZED = counted at host size;
+  EXCLUDED = configured out. It `static_assert`s that the FM-1 model fits
+  `Fm1Profile::RamBudgetBytes` (384 KiB, an assumption: platform RAM use is
+  unknown). Raising an FM-1 capacity past the budget stops the build.
+- **Current state:** FM-1 configured model 296,040 B (headroom 97,176 B);
+  while loading 426,096 B (32,880 B over: `LoadScratch` is kept for now);
+  what actually compiles today with FM-1 voices is 1,185,456 B (792,240 B
+  over), because `Pattern`, `RecordedTrack`, the `Sequencer` buffers,
+  reverb and tape are not parameterised yet. **Never claim the FM-1
+  profile proves a firmware fits**: platform RAM, samples (flash playback
+  is not implemented) and CPU are not accounted.
+- **Zero-initialised storage:** a default `PatternBank` is all zero bytes
+  (records default to 0; slot metadata in a private `SlotStore` stores
+  non-zero defaults XOR their default). Keep new pool-sized structures
+  zero-initialisable so static instances land in `.bss`, not initialised
+  data. `engine_031` compares the bank against Engine 030 fingerprints.
+- `AudioPipeline` has defaulted `FmVoices` / `PolyVoices` parameters;
+  `AudioPipeline<16>` is unchanged.
+- Full details: `docs/PROGRESS_REPORT.md` §18.
+
 ## Hardware constraints and safety rules
 
 - **Hardware model:** `docs/FM1_HARDWARE_REPORT.md` (Engine 030). Use only
@@ -418,6 +450,7 @@ voice count are independent (default 16 voices, like the manager's default).
     `double`);
   - 44.1 kHz audio (the engine is fixed at 48 kHz).
 
+  The FM-1 resource profile and RAM model are in `core/target/` (Engine 031).
   `tests/audio/engine_030.cpp` pins the engine's resource figures that the
   report quotes; update the report whenever it changes.
 - **Unknown and must not be assumed:** anything that
@@ -459,6 +492,7 @@ core/audio/                 engine-wide types, mixers, tape, sampler, pads, pipe
 core/audio/effects/         EQ, compressor, soft clipper, tape, distortion, reverb, chain
 core/sequencer/             musical time, clock, pattern, sequencer (025), recorder (026), quantize (027),
                             pattern bank, arrangement, persistence (028)
+core/target/                target resource profiles (HOST, FM1) and RAM accounting (031)
 instruments/synthesizers/   mono / FM / poly synths, ADSR
 tests/audio/engine_NNN.cpp  one program per engine milestone (render demo or assertion test)
 tests/audio/tape_*_test.cpp assertion tests for tape components
@@ -474,7 +508,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 44 tests (+ label portability)
+ctest --test-dir build --output-on-failure          # all 45 tests (+ label portability)
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 

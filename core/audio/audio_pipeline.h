@@ -75,15 +75,20 @@ namespace databreaks {
 
 // SynthTarget, SynthEventType and SynthEvent: see synth_event.h.
 
+// FmVoices / PolyVoices (Engine 031) let a target resource profile choose
+// the synth voice counts; the defaults are the existing host engine
+// (AudioPipeline<16> is unchanged).
 template <std::size_t DrumVoices = 16,
           std::size_t DrumEvents = 256,
-          std::size_t SynthEvents = 256>
+          std::size_t SynthEvents = 256,
+          std::size_t FmVoices = 4,
+          std::size_t PolyVoices = 8>
 class AudioPipeline {
 public:
     using Drums = DrumEngine<DrumVoices, DrumEvents>;
     using Mono = MonoSynthEngine;
-    using Fm = FmSynthEngine<>;
-    using Poly = PolySynthEngine<>;
+    using Fm = FmSynthEngine<FmVoices>;
+    using Poly = PolySynthEngine<PolyVoices>;
     using SynthQueue = SpscRing<SynthEvent, SynthEvents>;
 
     AudioPipeline() {

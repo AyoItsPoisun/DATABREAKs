@@ -80,14 +80,17 @@ int main() {
         std::size_t documented;  // native __int128 build
         std::size_t portable;    // -DDATABREAKS_PORTABLE_INT128 build (8-byte-aligned clock)
     };
+    // Engine 031 made PatternBank's slot metadata zero-initialisable, which
+    // packs its pass table tighter: DefaultPatternBank -640 B (and the
+    // Sequencer, AudioPipeline and LoadScratch that contain it).
     const Row rows[] = {
-        {"AudioPipeline<16>", sizeof(AudioPipeline<16>), 919840, 919832},
-        {"Sequencer", sizeof(Sequencer), 655264, 655256},
+        {"AudioPipeline<16>", sizeof(AudioPipeline<16>), 919200, 919192},
+        {"Sequencer", sizeof(Sequencer), 654624, 654616},
         {"Pattern (working)", sizeof(Pattern), 127024, 127024},
         {"RecordedTrack (working)", sizeof(RecordedTrack), 182584, 182584},
-        {"DefaultPatternBank", sizeof(DefaultPatternBank), 200480, 200480},
+        {"DefaultPatternBank", sizeof(DefaultPatternBank), 199840, 199840},
         {"Arrangement", sizeof(Arrangement), 272, 272},
-        {"LoadScratch<DefaultPatternBank>", sizeof(pattern_io::LoadScratch<DefaultPatternBank>), 510088, 510088},
+        {"LoadScratch<DefaultPatternBank>", sizeof(pattern_io::LoadScratch<DefaultPatternBank>), 509448, 509448},
         {"Reverb", sizeof(Reverb), 163560, 163560},
         {"DrumEngine<16>", sizeof(DrumEngine<16>), 45544, 45544},
         {"TapeEffect", sizeof(TapeEffect), 10080, 10080},
