@@ -8,14 +8,18 @@ Read this file, `docs/PROGRESS_REPORT.md`, and the code before changing anything
 DATABREAKs is an original, open-source **replacement firmware and
 music-production platform for the M-VAVE FM-1**. The long-term goal is a
 complete, independent firmware that runs on the FM-1 hardware. The device has
-**27 physical pads**.
+**27 physical pads**: 27 note keys (F3–G5), which M-VAVE's own firmware API
+reports as on/off bits with no velocity field, plus 14 buttons, 7 encoders
+and one potentiometer. **Before relying on any FM-1 hardware fact, read
+`docs/FM1_HARDWARE_REPORT.md`** (Engine 030). It separates VERIFIED facts
+from inferences and unknowns, with sources.
 
 ## Current reality (keep this section honest and up to date)
 
 Development history: `90e8dfb` (initial synths) → `e75b325` on
 `recovery/codespaces-engine-018` (recovered Codespaces work through Engine 018)
 → `claude/engine-019-prep-transfer` (CTest/docs transfer, then Engines
-019–029).
+019–030).
 
 Everything in this repository is a **host-side C++17 prototype** built and
 tested on a development machine. **Nothing here is FM-1 firmware.** There is no
@@ -405,11 +409,31 @@ voice count are independent (default 16 voices, like the manager's default).
 
 ## Hardware constraints and safety rules
 
-- **Unknown and must not be assumed:** the FM-1's MCU/SoC, GPIO mappings,
-  pad-matrix wiring, display controller and protocol, audio codec, flash
-  layout, bootloader, and recovery method. Anything about these must come from
-  documented, verified sources or measurement, and must be recorded with its
-  source (in `docs/hardware/`) before code depends on it.
+- **Hardware model:** `docs/FM1_HARDWARE_REPORT.md` (Engine 030). Use only
+  facts marked VERIFIED as facts; treat STRONG INFERENCE as provisional.
+  Headline constraints:
+  - about 511 KiB of internal SRAM plus 28 KiB of cache RAM, no SDRAM
+    (the engine currently needs about 1.14–1.19 MB);
+  - an FPU that appears to be single-precision only (the engine is all
+    `double`);
+  - 44.1 kHz audio (the engine is fixed at 48 kHz).
+
+  `tests/audio/engine_030.cpp` pins the engine's resource figures that the
+  report quotes; update the report whenever it changes.
+- **Unknown and must not be assumed:** anything that
+  `docs/FM1_HARDWARE_REPORT.md` does not mark VERIFIED. Still unknown or
+  only inferred:
+  - total SRAM and free RAM;
+  - the operating clock;
+  - FPU precision;
+  - the audio codec part;
+  - flash endurance;
+  - power and brown-out behaviour;
+  - the bootloader entry and recovery method.
+
+  New hardware facts must come from documented sources or measurement and
+  be recorded with their source (in that report, or `docs/hardware/`)
+  before code depends on them.
 - **Never flash hardware, erase or overwrite existing firmware**, or run any
   tool that talks to a connected device, unless the maintainer explicitly asks
   for that specific action at that time.
@@ -450,7 +474,7 @@ bare name (`x.h`, via the `include_directories` in `CMakeLists.txt`). Both work.
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # all 43 tests (+ label portability)
+ctest --test-dir build --output-on-failure          # all 44 tests (+ label portability)
 ctest --test-dir build -L unit --output-on-failure  # assertion tests only
 ```
 

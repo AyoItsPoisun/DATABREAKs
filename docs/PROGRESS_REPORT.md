@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-21 for Engine 029 on branch `claude/engine-019-prep-transfer`.
-Engine 029 starts from `d0790c0` (Engine 028). Engine 028 started from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-21 for Engine 030 on branch `claude/engine-019-prep-transfer`.
+Engine 030 starts from `78a7da7` (Engine 029). Engine 029 started from `d0790c0` (Engine 028). Engine 028 started from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -21,11 +21,12 @@ History of this report:
 - **`7712644`:** updated for Engine 026 (recording and performance capture).
 - **`2c6c2bd`:** updated for Engine 027 (non-destructive quantization).
 - **`d0790c0`:** updated for Engine 028 (pattern banks, switching and arrangement foundation).
-- **Engine 029 commit:** updated for Engine 029 (target portability boundary).
+- **`78a7da7`:** updated for Engine 029 (target portability boundary).
+- **Engine 030 commit:** updated for Engine 030 (FM-1 hardware and resource model; see `docs/FM1_HARDWARE_REPORT.md`).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 029**:
+The repository contains host-side C++17 prototypes through **Engine 030**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -43,7 +44,8 @@ The repository contains host-side C++17 prototypes through **Engine 029**:
 - performance recording (026): free and loop recording of drum hits and synth notes (musical events, not audio) with overdub, replace, punch in/out and 16-step undo/redo. Raw timing is kept at 1/1024-tick resolution and replays on the captured sample. Cross-thread control uses lock-free command and live-input queues;
 - non-destructive quantization (027): grid (whole to 1/64), strength 0–100 %, swing, per-kind and per-pad selection and optional note-off quantization, applied at playback from the untouched raw recording;
 - pattern banks and an arrangement foundation (028): 16 compactly stored patterns with their own recordings, undo history and quantize settings, sample-exact switching at beat/bar/loop boundaries, a song chain with repeats and end modes, and a versioned, checksummed save format;
-- **a target portability boundary** (029): the core now compiles for 32-bit targets (portable exact 128-bit clock arithmetic, bit-identical); storage, audio-I/O and input interfaces (`platform/`) with host implementations; the save format streams through injected storage with no heap; build gates keep platform headers out of the core.
+- a target portability boundary (029): the core now compiles for 32-bit targets (portable exact 128-bit clock arithmetic, bit-identical); storage, audio-I/O and input interfaces (`platform/`) with host implementations; the save format streams through injected storage with no heap; build gates keep platform headers out of the core;
+- **an FM-1 hardware and resource model** (030, research only): `docs/FM1_HARDWARE_REPORT.md` separates verified FM-1 facts from inferences and unknowns, and measures the engine against them. The current engine needs about 2.2× the FM-1's mapped SRAM and is entirely `double` on a chip whose FPU appears to be single-precision only.
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -62,9 +64,20 @@ the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 029 commit
+### 2.1 Engine 030 commit
 
-Same environment as §2.10. See §16.6 for the full table.
+Same environment as §2.11. Documentation and one new test only; no engine
+code changed.
+
+- Default build: 0 warnings; **44/44** CTest tests pass (the 43 existing tests plus `engine_030`, 6 checks).
+- Release, `-DDATABREAKS_PORTABLE_INT128=ON` and ASan+UBSan builds: 44/44 each.
+- TSan: Engines 020–030, no reports.
+- All reference renders are byte-identical.
+- No FM-1 hardware was touched.
+
+### 2.2 Engine 029 commit (`78a7da7`)
+
+Same environment as §2.11. See §16.6 for the full table.
 
 - **Default build:** 0 warnings; **43/43** CTest tests pass (39 existing + `engine_029` + 3 portability gates).
 - **Release, portable-integer and ASan+UBSan builds:** 43/43 each.
@@ -75,9 +88,9 @@ Same environment as §2.10. See §16.6 for the full table.
 - **Mutation checks:** 15/15 caught.
 - **FM-1 hardware:** not run.
 
-### 2.2 Engine 028 commit (`d0790c0`)
+### 2.3 Engine 028 commit (`d0790c0`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -95,9 +108,9 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.3 Engine 027 commit (`2c6c2bd`)
+### 2.4 Engine 027 commit (`2c6c2bd`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -115,9 +128,9 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.4 Engine 026 commit (`7712644`)
+### 2.5 Engine 026 commit (`7712644`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -135,9 +148,9 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.5 Engine 025 commit (`f94fcef`)
+### 2.6 Engine 025 commit (`f94fcef`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -154,9 +167,9 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.6 Engine 024 commit (`3bdd248`)
+### 2.7 Engine 024 commit (`3bdd248`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -174,9 +187,9 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.7 Engine 023 commit (`7a1ced6`)
+### 2.8 Engine 023 commit (`7a1ced6`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -194,9 +207,9 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.8 Engine 022 commit (`d326959`)
+### 2.9 Engine 022 commit (`d326959`)
 
-Same environment as §2.10.
+Same environment as §2.11.
 
 | Check | Result |
 |---|---|
@@ -213,7 +226,7 @@ Same environment as §2.10.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.9 Engine 021 commit (`100a8e1`)
+### 2.10 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -232,7 +245,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.10 Engine 020 commit (`dfd3164`)
+### 2.11 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -252,7 +265,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.11 Engine 019 commit (`ce44e70`, for reference)
+### 2.12 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -2796,9 +2809,46 @@ Nothing below is verified, and nothing in the code assumes it:
 - Static placement of the pipeline and the load scratch in a target memory map.
 - A cross-compiler build (an ARM GCC toolchain is not installed here). The 32-bit check is a type-check, not a target build or run.
 
-## 17. Recommended next steps (in order)
+## 17. Engine 030: FM-1 hardware and resource model
 
-1. Review Engines 019–029 (branch `claude/engine-019-prep-transfer`), and listen to `databreaks_engine_021_demo.wav` and the Engine 022–028 demo renders.
+A research and measurement engine. **The full report is
+[`docs/FM1_HARDWARE_REPORT.md`](FM1_HARDWARE_REPORT.md).** It labels every
+hardware statement as VERIFIED (manufacturer documents: M-VAVE's own
+`fm1_open` firmware source and JieLi's AC7911B datasheet), STRONG
+INFERENCE, or UNKNOWN, and compares it with measured DATABREAKs
+requirements. No engine code or behaviour changed.
+
+**Key findings:**
+
+- **The FM-1** is built on a JieLi AC791N/WL82 (VERIFIED), likely the AC7911B (QFN-48). Its core is a 32-bit pi32v2, probably dual-core, with a 320 MHz maximum.
+- **Memory:** M-VAVE's own build maps about **511 KiB of internal SRAM plus 28 KiB of cache RAM, and no SDRAM**. Flash is 1 MiB, of which 536,576 B is user data.
+- **Audio:** **44.1 kHz** nominal (44,118 Hz in hardware), 24-bit Q23 stereo in 128-frame blocks.
+- **Controls:** 27 on/off note keys plus 14 buttons, 7 encoders and one potentiometer; a 240 × 240 RGB565 display. MIDI over DIN (TRS), USB and BLE.
+- **The FPU appears to be single-precision only;** `double` runs in software (strong inference from the ISA reference, M-VAVE's compile flags and the datasheet).
+- **DATABREAKs as it is** needs about **1.14–1.19 MB of RAM** (2.1–2.3× the mapped SRAM). It is entirely `double`, fixed at 48 kHz, and runs 29 voices.
+  - A lower-bound count of the drum path alone is ≈ 20 software-float calls per voice per frame, ≥ 7,200 cycles for 16 voices. That is above the whole 240 MHz budget of 5,442 cycles per frame.
+  - A statically placed pattern bank would cost about 200 KB of `.data` (flash and RAM).
+- **Unchanged and portable:** the sequencer, quantizer, arrangement, DBPB format and the platform boundaries.
+- **Needs adaptation:** a target resource profile, a `float` or fixed-point DSP path (a deliberate audio change), the sample rate, flash-resident compact samples, zero-initialisable static pools, and a staging-free load.
+- **The 16-voice pipeline is not reasonable for the FM-1 as configured:** M-VAVE's own engines run 12 and 8 voices on this chip.
+
+**New test:** `tests/audio/engine_030.cpp` (`unit`, 6 checks). It pins the
+resource figures the report quotes: object sizes (for both the native and
+the portable `__int128` layout, which differ by 8 bytes in `Sequencer`), the 268,800-byte
+construction heap, the 206,026-byte worst-case saved bank, the `double`
+format at 48 kHz, 29 voices, and 768,000 bytes per second of samples. Any
+change to them fails the test and forces the report to be updated. It
+simulates no hardware.
+
+**Recommended Engine 031:** an "FM-1 resource profile", i.e. compile-time
+capacities and voice counts for the target, with an accounting test
+against an explicit RAM budget. The host profile and all output stay
+unchanged. `float` DSP and 44.1 kHz come later, as deliberate audio
+changes backed by on-device measurement.
+
+## 18. Recommended next steps (in order)
+
+1. Review Engines 019–030 (branch `claude/engine-019-prep-transfer`), read `docs/FM1_HARDWARE_REPORT.md`, and listen to `databreaks_engine_021_demo.wav` and the Engine 022–028 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
 3. Add a LICENSE (the maintainer's choice) and a README, and remove the stray empty file (R6).
 4. ~~Engine 024: tape processor as an `AudioEffect` inserted into the chain.~~ Done (§11). Possible follow-ups:
@@ -2836,8 +2886,9 @@ Nothing below is verified, and nothing in the code assumes it:
    - sample storage as non-owning views (int16 / flash);
    - heap-free `TapeMachine` and `SampleSliceMap` storage;
    - a faster portable 128-by-64 division.
+12. Engine 031 (recommended in `docs/FM1_HARDWARE_REPORT.md` §10): an FM-1 resource profile and RAM accounting, with the host output unchanged. Then, separately and with on-device measurement: a `float`/fixed-point DSP path, a 44.1 kHz rate, flash-resident samples and a flash `StorageBackend`.
 
-## 18. Change log on this branch
+## 19. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -2936,3 +2987,9 @@ Nothing below is verified, and nothing in the code assumes it:
   - updated `CLAUDE.md` and this report.
 
   No earlier test was changed. Sequencer behaviour, DSP, the DBPB bytes and every reference render are unchanged.
+- **Engine 030 commit:**
+  - added `docs/FM1_HARDWARE_REPORT.md` and `tests/audio/engine_030.cpp`;
+  - `CMakeLists.txt`: the `engine_030` target, the warning loop and the `unit` test entry;
+  - updated `CLAUDE.md` (pointer to the report) and this report.
+
+  No engine code changed; every render is byte-identical.
