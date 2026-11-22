@@ -54,10 +54,17 @@
 
 namespace databreaks {
 
+// Profile (Engine 032) selects the working-state types a slot is stored
+// from and loaded into (BasicPattern<Profile>, BasicRecordedTrack<Profile>).
+// The pools and slot counts stay explicit; the stored records and the DBPB
+// format are the same for every profile.
 template <std::size_t Banks, std::size_t PatternsPerBank, std::size_t StepCapacity,
-          std::size_t NoteCapacity, std::size_t EventCapacity>
+          std::size_t NoteCapacity, std::size_t EventCapacity, typename Profile = HostProfile>
 class PatternBank {
 public:
+    using ProfileType = Profile;
+    using PatternType = BasicPattern<Profile>;
+    using TrackType = BasicRecordedTrack<Profile>;
     static_assert(Banks >= 1 && PatternsPerBank >= 1, "need at least one slot");
     static constexpr std::size_t BankCount = Banks;
     static constexpr std::size_t PerBank = PatternsPerBank;
@@ -170,10 +177,10 @@ public:
     std::uint64_t fullCount() const { return full_; }
 
     // Pool requirements of a working pattern (what store() would need).
-    static std::size_t stepsNeeded(const Pattern& p) {
+    static std::size_t stepsNeeded(const PatternType& p) {
         std::size_t n = 0;
-        for (std::size_t pad = 0; pad < Pattern::Lanes; ++pad) {
-            for (std::size_t k = 0; k < Pattern::MaxSteps; ++k) {
+        for (std::size_t pad = 0; pad < PatternType::Lanes; ++pad) {
+            for (std::size_t k = 0; k < PatternType::MaxSteps; ++k) {
                 n += isDefault(*p.step(pad, k)) ? 0 : 1;
             }
         }
@@ -185,7 +192,7 @@ public:
     // Saves a complete pattern state into slot `id` (marking it used).
     // Returns false, changes nothing and counts it if `id` is invalid, the
     // data cannot be packed, or the pools cannot hold it.
-    bool store(int id, const Pattern& pattern, const RecordedTrack& track,
+    bool store(int id, const PatternType& pattern, const TrackType& track,
                const QuantizeSettings& quantize) {
         if (!validId(id) || !quantize.valid()) return false;
         SlotStore& s = slots_[static_cast<std::size_t>(id)];
@@ -203,8 +210,8 @@ public:
         }
         release(static_cast<std::size_t>(id));
         s.stepOffset = stepsUsed_;
-        for (std::size_t pad = 0; pad < Pattern::Lanes; ++pad) {
-            for (std::size_t k = 0; k < Pattern::MaxSteps; ++k) {
+        for (std::size_t pad = 0; pad < PatternType::Lanes; ++pad) {
+            for (std::size_t k = 0; k < PatternType::MaxSteps; ++k) {
                 const DrumStep& d = *pattern.step(pad, k);
                 if (isDefault(d)) continue;
                 StepRecord r;
@@ -246,7 +253,7 @@ public:
 
     // Loads slot `id` into a working pattern state (an empty slot loads the
     // empty default pattern). Returns false for an invalid id.
-    bool load(int id, Pattern& pattern, RecordedTrack& track, QuantizeSettings& quantize) const {
+    bool load(int id, PatternType& pattern, TrackType& track, QuantizeSettings& quantize) const {
         if (!validId(id)) return false;
         const SlotStore& s = slots_[static_cast<std::size_t>(id)];
         pattern.configure(s.timeSignature(), s.bars(), s.stepTicks());
@@ -274,7 +281,7 @@ public:
         }
         // Unpacked straight into the track (no intermediate buffer).
         const EventRecord* records = events_.data() + s.eventOffset;
-        std::array<RecordedTrack::PassState, RecordedTrack::MaxPasses> passes{};
+        std::array<RecordedPassState, TrackType::MaxPasses> passes{};
         for (std::size_t i = 0; i < passes.size(); ++i) passes[i] = s.pass(i);
         track.restoreFrom(s.eventCount, [records](std::size_t i) { return unpack(records[i]); },
                           passes.data(), s.passCount, s.nextPassId());
@@ -348,7 +355,7 @@ public:
     // Pattern::configure: data is kept). Marks the slot used.
     bool setShape(int id, TimeSignature ts, int bars, std::int64_t stepTicks) {
         if (!validId(id)) return false;
-        Pattern probe;  // validation only (no allocation: a local object)
+        PatternType probe;  // validation only (no allocation: a local object)
         if (!probe.configure(ts, bars, stepTicks)) return false;
         SlotStore& s = slots_[static_cast<std::size_t>(id)];
         s.setShape(ts, bars, stepTicks);
@@ -379,7 +386,7 @@ public:
     const EventRecord* eventRecords(int id) const {
         return validId(id) ? events_.data() + slots_[static_cast<std::size_t>(id)].eventOffset : nullptr;
     }
-    RecordedTrack::PassState passState(int id, std::size_t i) const {
+    RecordedPassState passState(int id, std::size_t i) const {
         return slots_[static_cast<std::size_t>(id)].pass(i);
     }
     std::uint32_t nextPassId(int id) const { return slots_[static_cast<std::size_t>(id)].nextPassId(); }
@@ -488,15 +495,15 @@ private:
         std::uint32_t nextPassId() const { return nextPassIdX_ ^ 1u; }
         void setNextPassId(std::uint32_t id) { nextPassIdX_ = id ^ 1u; }
 
-        RecordedTrack::PassState pass(std::size_t i) const {
-            const RecordedTrack::PassState d{};
-            RecordedTrack::PassState p;
+        RecordedPassState pass(std::size_t i) const {
+            const RecordedPassState d{};
+            RecordedPassState p;
             p.id = passIds_[i] ^ d.id;
             p.active = passActiveX_[i] != d.active;
             return p;
         }
-        void setPass(std::size_t i, RecordedTrack::PassState p) {
-            const RecordedTrack::PassState d{};
+        void setPass(std::size_t i, RecordedPassState p) {
+            const RecordedPassState d{};
             passIds_[i] = p.id ^ d.id;
             passActiveX_[i] = p.active != d.active;
         }
@@ -513,8 +520,8 @@ private:
         std::uint32_t drumLanesX_ = 0;
         bool noteOffX_ = false;
         std::uint32_t nextPassIdX_ = 0;
-        std::array<std::uint32_t, RecordedTrack::MaxPasses> passIds_{};
-        std::array<bool, RecordedTrack::MaxPasses> passActiveX_{};
+        std::array<std::uint32_t, TrackType::MaxPasses> passIds_{};
+        std::array<bool, TrackType::MaxPasses> passActiveX_{};
     };
 
     std::array<SlotStore, Capacity> slots_{};
@@ -555,18 +562,26 @@ private:
 // SequencerCommandType::ReplacePattern (or loaded from a file). The sender
 // keeps it alive until `status` becomes non-zero (1 = applied, -1 =
 // rejected); the audio thread only reads it while status is 0. About
-// 310 KB: allocate it outside the audio thread.
-struct PatternData {
-    Pattern pattern;
-    RecordedTrack track;
+// 310 KB for the host profile: allocate it outside the audio thread.
+template <typename Profile>
+struct BasicPatternData {
+    BasicPattern<Profile> pattern;
+    BasicRecordedTrack<Profile> track;
     QuantizeSettings quantize{};
     std::atomic<int> status{0};
 };
+using PatternData = BasicPatternData<HostProfile>;
 
 // The Sequencer's bank: 2 banks x 8 patterns = 16 patterns, sharing 8,192
 // drum steps (more than one fully dense 27 x 256 pattern), 1,024 notes and
 // 2,048 recorded events (one full Engine 026 track). See the progress report
 // for the memory reasoning.
 using DefaultPatternBank = PatternBank<2, 8, 8192, 1024, 2048>;
+
+// The bank a target profile's Sequencer owns (Engine 032): slots and pools
+// from the profile. ProfilePatternBank<HostProfile> is DefaultPatternBank.
+template <typename P>
+using ProfilePatternBank = PatternBank<P::PatternBanks, P::PatternsPerBank, P::BankStepPool,
+                                       P::BankNotePool, P::BankEventPool, P>;
 
 } // namespace databreaks

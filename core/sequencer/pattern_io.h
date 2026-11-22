@@ -325,6 +325,14 @@ constexpr std::size_t PassBytes = 5;
 constexpr std::size_t EventBytes = 65;
 constexpr std::int64_t MaxPatternTicks = 32 * 3840 * Pattern::MaxBars;
 
+// DBPB v1 per-pattern limits. They are the host engine's capacities
+// (BasicPattern/BasicRecordedTrack<HostProfile>) and are part of the format:
+// a file beyond them is OutOfRange. A bank built for a smaller profile
+// (Engine 032) rejects a VALID file that exceeds its own working capacities
+// with CapacityExceeded instead; for the host profile the two coincide.
+using FormatPattern = BasicPattern<HostProfile>;
+using FormatTrack = BasicRecordedTrack<HostProfile>;
+
 // Decodes one 65-byte event; false if a field is out of range.
 inline bool decodeEvent(SourceReader& p, RecordedEvent& e) {
     const std::uint32_t kind = p.u8();
@@ -429,7 +437,7 @@ bool save(const Bank& bank, const Arrangement& arrangement, int activeId, ByteSi
             w.i32(notes[i].lengthTicks);
         }
         for (std::size_t i = 0; i < info.passes; ++i) {
-            const RecordedTrack::PassState p = bank.passState(id, i);
+            const RecordedPassState p = bank.passState(id, i);
             w.u32(p.id);
             w.u8(p.active ? 1 : 0);
         }
@@ -489,8 +497,8 @@ void save(const Bank& bank, const Arrangement& arrangement, int activeId,
 template <typename Bank>
 struct LoadScratch {
     Bank staged;
-    Pattern pattern;
-    RecordedTrack track;
+    typename Bank::PatternType pattern;
+    typename Bank::TrackType track;
 };
 
 // Validates and loads from `source` into `bank`, `arrangement` and
@@ -535,9 +543,13 @@ LoadStatus load(const ByteSource& source, LoadScratch<Bank>& scratch, Bank& bank
     Arrangement stagedArrangement;
     int stagedActive = -1;
     bool haveArrangement = false;
-    std::array<RecordedTrack::PassState, RecordedTrack::MaxPasses> passes{};
+    using Pattern = typename Bank::PatternType;  // this bank's working capacities
+    using Track = typename Bank::TrackType;
+    using FormatPattern = detail::FormatPattern;  // the file format's limits
+    using FormatTrack = detail::FormatTrack;
+    std::array<RecordedPassState, FormatTrack::MaxPasses> passes{};
     std::array<bool, Bank::Capacity> seen{};
-    constexpr std::size_t StepSlots = Pattern::Lanes * Pattern::MaxSteps;
+    constexpr std::size_t StepSlots = FormatPattern::Lanes * FormatPattern::MaxSteps;
     std::array<std::uint64_t, (StepSlots + 63) / 64> stepSeen{};
 
     SourceReader r(source, detail::HeaderSize, bodyEnd, &ioError);
@@ -619,14 +631,23 @@ LoadStatus load(const ByteSource& source, LoadScratch<Bank>& scratch, Bank& bank
         if (!detail::decodeGrid(grid, q.grid) || noteOff > 1) return LoadStatus::OutOfRange;
         q.quantizeNoteOff = noteOff == 1;
         if (!q.valid()) return LoadStatus::OutOfRange;
-        if (stepCount > StepSlots || noteCount > Pattern::MaxNotes ||
-            passCount > RecordedTrack::MaxPasses || eventCount > RecordedTrack::MaxEvents) {
+        if (stepCount > StepSlots || noteCount > FormatPattern::MaxNotes ||
+            passCount > FormatTrack::MaxPasses || eventCount > FormatTrack::MaxEvents) {
             return LoadStatus::OutOfRange;
+        }
+        if (!FormatPattern::validShape({numerator, denominator}, bars, stepTicks)) {
+            return LoadStatus::OutOfRange;
+        }
+        // Valid DBPB, but beyond this bank's working capacities (only
+        // possible for a profile smaller than the host's).
+        if (noteCount > Pattern::MaxNotes || passCount > Track::MaxPasses ||
+            eventCount > Track::MaxEvents) {
+            return LoadStatus::CapacityExceeded;
         }
 
         Pattern& pattern = scratch.pattern;
         pattern = Pattern{};
-        if (!pattern.configure({numerator, denominator}, bars, stepTicks)) return LoadStatus::OutOfRange;
+        if (!pattern.configure({numerator, denominator}, bars, stepTicks)) return LoadStatus::CapacityExceeded;
         stepSeen.fill(0);
         for (std::size_t i = 0; i < stepCount; ++i) {
             const std::size_t pad = p.u8();
@@ -637,15 +658,17 @@ LoadStatus load(const ByteSource& source, LoadScratch<Bank>& scratch, Bank& bank
             d.probability = static_cast<int>(p.u8());
             d.microTicks = static_cast<int>(p.i16());
             if (ioError) return LoadStatus::ReadError;
-            if (pad >= Pattern::Lanes || step >= Pattern::MaxSteps || enabled > 1 ||
+            if (pad >= FormatPattern::Lanes || step >= FormatPattern::MaxSteps || enabled > 1 ||
                 d.velocity < 1 || d.velocity > 127 || d.probability > 100 ||
-                d.microTicks < -Pattern::MaxStepTicks / 2 || d.microTicks > Pattern::MaxStepTicks / 2) {
+                d.microTicks < -FormatPattern::MaxStepTicks / 2 ||
+                d.microTicks > FormatPattern::MaxStepTicks / 2) {
                 return LoadStatus::OutOfRange;
             }
             d.enabled = enabled == 1;
-            const std::size_t slot = pad * Pattern::MaxSteps + step;
+            const std::size_t slot = pad * FormatPattern::MaxSteps + step;
             if ((stepSeen[slot / 64] >> (slot % 64)) & 1u) return LoadStatus::Inconsistent;
             stepSeen[slot / 64] |= std::uint64_t{1} << (slot % 64);
+            if (step >= Pattern::MaxSteps) return LoadStatus::CapacityExceeded;
             pattern.restoreStep(pad, step, d);
         }
         for (std::size_t i = 0; i < noteCount; ++i) {
@@ -661,7 +684,7 @@ LoadStatus load(const ByteSource& source, LoadScratch<Bank>& scratch, Bank& bank
             if (enabled > 1 || !detail::decodeTarget(target, n.target) || n.note > 127 ||
                 n.velocity < 1 || n.velocity > 127 || n.probability > 100 || n.startTick < 0 ||
                 n.startTick >= detail::MaxPatternTicks || n.lengthTicks < 1 ||
-                n.lengthTicks > Pattern::MaxNoteLengthTicks) {
+                n.lengthTicks > FormatPattern::MaxNoteLengthTicks) {
                 return LoadStatus::OutOfRange;
             }
             n.enabled = enabled == 1;
@@ -681,7 +704,7 @@ LoadStatus load(const ByteSource& source, LoadScratch<Bank>& scratch, Bank& bank
             RecordedEvent e;
             const bool fieldsOk = detail::decodeEvent(p, e);
             if (ioError) return LoadStatus::ReadError;
-            if (!fieldsOk || !RecordedTrack::validEvent(e) || !Bank::packable(e) ||
+            if (!fieldsOk || !Track::validEvent(e) || !Bank::packable(e) ||
                 e.startFine >= detail::MaxPatternTicks * MusicalClock::FinePerTick) {
                 return LoadStatus::OutOfRange;
             }

@@ -33,6 +33,7 @@
 // the Sequencer's command queue.
 
 #include "../audio/synth_event.h"
+#include "../target/target_profile.h"
 
 #include <array>
 #include <cstddef>
@@ -97,11 +98,23 @@ inline unsigned targetBit(const RecordedEvent& e) {
     return 0;
 }
 
-class RecordedTrack {
+// One entry of a track's pass table (exported by pass(), restored by
+// restore()/restoreFrom()). The same type for every profile (Engine 032).
+struct RecordedPassState {
+    std::uint32_t id = 0;
+    bool active = true;
+};
+
+// Capacities (Engine 032): BasicRecordedTrack<Profile> takes MaxEvents and
+// MaxPasses from a target profile. `RecordedTrack` is the host engine:
+// BasicRecordedTrack<HostProfile> (2,048 events, 512 per pass, 16 passes).
+template <typename Profile>
+class BasicRecordedTrack {
 public:
-    static constexpr std::size_t MaxEvents = 2048;
-    static constexpr std::size_t MaxEventsPerPass = 512;
-    static constexpr std::size_t MaxPasses = 16;  // undo depth
+    static constexpr std::size_t MaxEvents = Profile::RecordedEvents;
+    static constexpr std::size_t MaxEventsPerPass = MaxEvents < 512 ? MaxEvents : 512;
+    static constexpr std::size_t MaxPasses = Profile::RecordedPasses;  // undo depth
+    static_assert(MaxEvents >= 1 && MaxPasses >= 1, "track capacities");
 
     // ---- Passes ------------------------------------------------------------
 
@@ -246,10 +259,7 @@ public:
 
     // ---- Exact save / restore (Engine 028) ---------------------------------
 
-    struct PassState {
-        std::uint32_t id = 0;
-        bool active = true;
-    };
+    using PassState = RecordedPassState;
 
     std::size_t passCount() const { return passCount_; }
     PassState pass(std::size_t i) const { return {passes_[i].id, passes_[i].active}; }
@@ -414,5 +424,8 @@ private:
         markDirty();
     }
 };
+
+// The host engine's track (2,048 events).
+using RecordedTrack = BasicRecordedTrack<HostProfile>;
 
 } // namespace databreaks

@@ -1,32 +1,36 @@
 #pragma once
 
-// DATABREAKs Engine 031 - RAM accounting for a target resource profile.
+// DATABREAKs Engines 031-032 - RAM accounting for a target resource profile.
 //
 // resourceReport<Profile>() lists the engine's major RAM consumers for a
 // profile (target_profile.h), each with HOW its figure was obtained:
 //
-//   Measured  - sizeof() of a real C++ type built with this profile's
-//               capacities (or an unchanged type), or an exact array size
-//               read from the code. Nothing estimated.
-//   Modelled  - the class is NOT yet parameterised by a profile, so its
-//               size for this profile is computed: the profile's capacity x
-//               the measured element size + the class's fixed part as
-//               measured on the host. Not a compiled object.
-//   HostSized - a part that no profile value controls yet, counted at its
-//               measured host size (an upper bound for a smaller target).
-//   Excluded  - left out of this profile by configuration; `ifIncluded`
-//               shows what including it would cost.
+//   Measured  - sizeof() of the real C++ type this profile instantiates, or
+//               an exact array size read from that type. Nothing estimated.
+//   Modelled  - capacity x measured element size + a measured fixed part,
+//               for a class a profile does not control. (Engine 031 needed
+//               this for Pattern, RecordedTrack and the Sequencer buffers;
+//               since Engine 032 they are real per-profile types and no row
+//               is modelled. The basis is kept for future use.)
+//   HostSized - counted at its host size because no profile controls it.
+//               (No row since Engine 032.)
+//   Excluded  - left out of this profile's build (the member does not
+//               exist); `ifIncluded` shows what including it would cost.
 //
-// All of it is constexpr: the static_asserts at the end prove at compile
-// time that (1) HostProfile matches the engine value for value, (2) the host
-// decomposition adds up to the real object sizes byte for byte, and (3) the
-// FM-1 profile's configured model fits its RAM budget.
+// Since Engine 032 every profile's AudioPipeline, Sequencer, pattern bank,
+// working pattern, recorded track, event buffer, voices and effects are real
+// types built from the profile (ProfilePipeline<P>), so the report is a
+// decomposition of real objects for EVERY profile, and the static_asserts
+// below prove at compile time that:
+//   (1) HostProfile is the engine value for value;
+//   (2) the FM-1 instantiation uses the FM-1 profile's capacities;
+//   (3) both decompositions add up to the real object sizes byte for byte;
+//   (4) the FM-1 build's permanent RAM fits its budget.
 //
-// What this does NOT prove: that a finished FM-1 firmware fits. The model
-// leaves out the platform layer (USB, BLE, display, RTOS, stacks, heap),
-// samples in RAM (none: flash playback is not implemented), code-related
-// data, and the Modelled/Excluded classes are not built for the FM-1 yet.
-// See docs/PROGRESS_REPORT.md (Engine 031) for the list.
+// What this does NOT prove: that a finished FM-1 firmware fits. It leaves
+// out the platform layer (USB, BLE, display, RTOS, stacks, heap), samples in
+// RAM (none: flash playback is not implemented), code-related data and the
+// CPU. The DSP is still double precision at 48 kHz in every profile.
 
 #include "target_profile.h"
 
@@ -40,15 +44,14 @@
 
 namespace databreaks {
 
-// Types a profile's capacities instantiate today.
-template <typename P>
-using ProfilePatternBank = PatternBank<P::PatternBanks, P::PatternsPerBank, P::BankStepPool,
-                                       P::BankNotePool, P::BankEventPool>;
+// The real types a profile builds (ProfilePatternBank<P> is in pattern_bank.h).
 template <typename P>
 using ProfileDrumEngine = DrumEngine<P::DrumVoices, P::DrumEventCapacity>;
 template <typename P>
 using ProfilePipeline = AudioPipeline<P::DrumVoices, P::DrumEventCapacity, P::SynthEventCapacity,
-                                      P::FmVoices, P::PolyVoices>;
+                                      P::FmVoices, P::PolyVoices, P>;
+template <typename P>
+using ProfileLoadScratch = pattern_io::LoadScratch<ProfilePatternBank<P>>;
 
 enum class Basis : std::uint8_t { Measured, Modelled, HostSized, Excluded };
 enum class Lifetime : std::uint8_t { Permanent, WhileLoading };
@@ -76,51 +79,28 @@ struct ResourceItem {
 
 namespace resource_detail {
 
-// ---- Element-scaled storage, with the element sizes taken from the code ----
-constexpr std::size_t patternArrays(std::size_t steps, std::size_t notes) {
-    return Pattern::Lanes * steps * sizeof(DrumStep) + notes * sizeof(NoteEvent);
-}
-// events_ (RecordedEvent) + visible_ (bool) per event
-constexpr std::size_t trackArrays(std::size_t events) {
-    return events * (sizeof(RecordedEvent) + sizeof(bool));
-}
-// Sequencer::events_: 2 x per-block + active notes + pending live inputs
-constexpr std::size_t eventBufferEntries(std::size_t perBlock, std::size_t active, std::size_t pending) {
-    return 2 * perBlock + active + pending;
-}
-// Sequencer quantize cache: quantStart_ + quantLength_ (int32 per event)
+// Sequencer quantize cache: quantStart_ + quantLength_ (int32 per event slot)
 constexpr std::size_t quantizeCache(std::size_t events) { return 2 * events * sizeof(std::int32_t); }
 // TapeMachine: delay + print-through buffers, two channels, double
 constexpr std::size_t tapeHeap(std::size_t delayFrames, std::size_t printFrames) {
     return (2 * delayFrames + 2 * printFrames) * sizeof(double);
 }
 
-// ---- Fixed (non-scaled) parts, measured on the host ----
-constexpr std::size_t PatternFixed = sizeof(Pattern) - patternArrays(Pattern::MaxSteps, Pattern::MaxNotes);
-constexpr std::size_t TrackFixed = sizeof(RecordedTrack) - trackArrays(RecordedTrack::MaxEvents);
-constexpr std::size_t RecorderOther = sizeof(Recorder) - sizeof(RecordedTrack);
-constexpr std::size_t HostEventBuffer = Sequencer::eventBufferCapacity() * sizeof(SequencerEvent);
-constexpr std::size_t HostQuantizeCache = quantizeCache(RecordedTrack::MaxEvents);
-constexpr std::size_t SequencerOther = sizeof(Sequencer) - sizeof(Pattern) - sizeof(Recorder) -
-                                       sizeof(DefaultPatternBank) - sizeof(Arrangement) -
-                                       HostEventBuffer - HostQuantizeCache;
+template <typename P>
+constexpr std::size_t eventBufferBytes() {
+    return BasicSequencer<P>::eventBufferCapacity() * sizeof(SequencerEvent);
+}
+template <typename P>
+constexpr std::size_t sequencerOther() {
+    return sizeof(BasicSequencer<P>) - sizeof(BasicPattern<P>) - sizeof(BasicRecorder<P>) -
+           sizeof(ProfilePatternBank<P>) - sizeof(Arrangement) - eventBufferBytes<P>() -
+           quantizeCache(P::RecordedEvents);
+}
 template <typename Pipe>
 constexpr std::size_t pipelineOther() {
-    return sizeof(Pipe) - sizeof(Sequencer) - sizeof(typename Pipe::Drums) - sizeof(typename Pipe::Mono) -
-           sizeof(typename Pipe::Fm) - sizeof(typename Pipe::Poly) - sizeof(Reverb) - sizeof(TapeEffect);
-}
-constexpr std::size_t PipelineOther = pipelineOther<AudioPipeline<>>();
-
-template <typename P>
-constexpr bool isHost() { return std::is_same<P, HostProfile>::value; }
-
-template <typename P>
-constexpr std::size_t patternBytes() {
-    return PatternFixed + patternArrays(P::PatternMaxSteps, P::PatternMaxNotes);
-}
-template <typename P>
-constexpr std::size_t trackBytes() {
-    return TrackFixed + trackArrays(P::RecordedEvents);
+    return sizeof(Pipe) - sizeof(typename Pipe::Sequencer) - sizeof(typename Pipe::Drums) -
+           sizeof(typename Pipe::Mono) - sizeof(typename Pipe::Fm) - sizeof(typename Pipe::Poly) -
+           (Pipe::HasReverb ? sizeof(Reverb) : 0) - (Pipe::HasTape ? sizeof(TapeEffect) : 0);
 }
 
 } // namespace resource_detail
@@ -145,6 +125,11 @@ struct ResourceReport {
         for (std::size_t i = 0; i < count; ++i) {
             n += (items[i].basis == basis && items[i].lifetime == lifetime) ? items[i].bytes : 0;
         }
+        return n;
+    }
+    constexpr std::size_t countBasis(Basis basis) const {
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < count; ++i) n += items[i].basis == basis ? 1 : 0;
         return n;
     }
     constexpr std::size_t sequencerBytes() const { return sum(Owner::Sequencer); }
@@ -173,121 +158,140 @@ struct ResourceReport {
 template <typename P>
 constexpr ResourceReport<P> resourceReport() {
     using namespace resource_detail;
-    constexpr bool host = isHost<P>();
-    // Host: the classes ARE these sizes. Other profiles: modelled.
-    constexpr Basis scaled = host ? Basis::Measured : Basis::Modelled;
-    constexpr Basis fixed = host ? Basis::Measured : Basis::HostSized;
     using Pipe = ProfilePipeline<P>;
+    constexpr Basis M = Basis::Measured;
+    constexpr Lifetime Perm = Lifetime::Permanent;
 
     ResourceReport<P> r;
     // ---- Sequencer (inside the AudioPipeline) ----
-    r.add({"Sequencer: working Pattern", patternBytes<P>(), scaled, Lifetime::Permanent, Owner::Sequencer, 0});
-    r.add({"Sequencer: RecordedTrack (working recording)", trackBytes<P>(), scaled, Lifetime::Permanent,
+    r.add({"Sequencer: working Pattern", sizeof(BasicPattern<P>), M, Perm, Owner::Sequencer, 0});
+    r.add({"Sequencer: RecordedTrack (working recording)", sizeof(BasicRecordedTrack<P>), M, Perm,
            Owner::Sequencer, 0});
-    r.add({"Sequencer: Recorder state besides the track", RecorderOther, fixed, Lifetime::Permanent,
+    r.add({"Sequencer: Recorder state besides the track",
+           sizeof(BasicRecorder<P>) - sizeof(BasicRecordedTrack<P>), M, Perm, Owner::Sequencer, 0});
+    r.add({"Sequencer: PatternBank (persisted patterns)", sizeof(ProfilePatternBank<P>), M, Perm,
            Owner::Sequencer, 0});
-    r.add({"Sequencer: PatternBank (persisted patterns)", sizeof(ProfilePatternBank<P>), Basis::Measured,
-           Lifetime::Permanent, Owner::Sequencer, 0});
-    r.add({"Sequencer: Arrangement", sizeof(Arrangement), Basis::Measured, Lifetime::Permanent,
-           Owner::Sequencer, 0});
-    r.add({"Sequencer: per-block event buffer",
-           eventBufferEntries(P::MaxEventsPerBlock, P::MaxActiveNotes, P::MaxPendingLive) *
-               sizeof(SequencerEvent),
-           scaled, Lifetime::Permanent, Owner::Sequencer, 0});
-    r.add({"Sequencer: quantize cache", quantizeCache(P::RecordedEvents), scaled, Lifetime::Permanent,
-           Owner::Sequencer, 0});
-    r.add({"Sequencer: clock, queues, active notes, other", SequencerOther, fixed, Lifetime::Permanent,
+    r.add({"Sequencer: Arrangement", sizeof(Arrangement), M, Perm, Owner::Sequencer, 0});
+    r.add({"Sequencer: per-block event buffer", eventBufferBytes<P>(), M, Perm, Owner::Sequencer, 0});
+    r.add({"Sequencer: quantize cache", quantizeCache(P::RecordedEvents), M, Perm, Owner::Sequencer, 0});
+    r.add({"Sequencer: clock, queues, active notes, other", sequencerOther<P>(), M, Perm,
            Owner::Sequencer, 0});
     // ---- Rest of the AudioPipeline object ----
-    r.add({"Drum engine (voices, 27 pads, event queues)", sizeof(typename Pipe::Drums), Basis::Measured,
-           Lifetime::Permanent, Owner::PipelineObject, 0});
+    r.add({"Drum engine (voices, 27 pads, event queues)", sizeof(typename Pipe::Drums), M, Perm,
+           Owner::PipelineObject, 0});
     r.add({"Synth engines (mono + FM + poly voices)",
-           sizeof(typename Pipe::Mono) + sizeof(typename Pipe::Fm) + sizeof(typename Pipe::Poly),
-           Basis::Measured, Lifetime::Permanent, Owner::PipelineObject, 0});
-    if (P::ReverbIncluded) {
-        r.add({"Reverb (double delay network)", sizeof(Reverb), Basis::Measured, Lifetime::Permanent,
-               Owner::PipelineObject, 0});
+           sizeof(typename Pipe::Mono) + sizeof(typename Pipe::Fm) + sizeof(typename Pipe::Poly), M, Perm,
+           Owner::PipelineObject, 0});
+    if (Pipe::HasReverb) {
+        r.add({"Reverb (double delay network)", sizeof(Reverb), M, Perm, Owner::PipelineObject, 0});
     } else {
-        r.add({"Reverb (double delay network)", 0, Basis::Excluded, Lifetime::Permanent,
-               Owner::PipelineObject, sizeof(Reverb)});
+        r.add({"Reverb (double delay network)", 0, Basis::Excluded, Perm, Owner::PipelineObject,
+               sizeof(Reverb)});
     }
-    if (P::TapeIncluded) {
-        r.add({"Tape effect object (dry line, controls)", sizeof(TapeEffect), Basis::Measured,
-               Lifetime::Permanent, Owner::PipelineObject, 0});
+    if (Pipe::HasTape) {
+        r.add({"Tape effect object (dry line, controls)", sizeof(TapeEffect), M, Perm, Owner::PipelineObject,
+               0});
         r.add({"Tape machine heap buffers (allocated at construction)",
-               tapeHeap(P::TapeDelayFrames, P::TapePrintFrames), Basis::Measured, Lifetime::Permanent,
-               Owner::TapeHeap, 0});
+               tapeHeap(P::TapeDelayFrames, P::TapePrintFrames), M, Perm, Owner::TapeHeap, 0});
     } else {
-        r.add({"Tape effect object (dry line, controls)", 0, Basis::Excluded, Lifetime::Permanent,
-               Owner::PipelineObject, sizeof(TapeEffect)});
-        r.add({"Tape machine heap buffers (allocated at construction)", 0, Basis::Excluded,
-               Lifetime::Permanent, Owner::TapeHeap,
-               tapeHeap(static_cast<std::size_t>(P::SampleRate / 10),
-                        static_cast<std::size_t>(P::SampleRate / 4))});
+        r.add({"Tape effect object (dry line, controls)", 0, Basis::Excluded, Perm, Owner::PipelineObject,
+               sizeof(TapeEffect)});
+        // What TapeMachine would allocate at the core's fixed rate.
+        r.add({"Tape machine heap buffers (allocated at construction)", 0, Basis::Excluded, Perm,
+               Owner::TapeHeap, TapeEffect::machineBufferBytes()});
     }
     r.add({"Pipeline: synth/drum queues, scheduled events, EQ, compressor, clipper, distortion, master",
-           host ? PipelineOther : pipelineOther<Pipe>(), Basis::Measured, Lifetime::Permanent,
-           Owner::PipelineObject, 0});
+           pipelineOther<Pipe>(), M, Perm, Owner::PipelineObject, 0});
     // ---- Samples ----
-    r.add({"Sample audio in RAM", P::SampleStorageBytes, Basis::Excluded, Lifetime::Permanent, Owner::Samples, 0});
+    r.add({"Sample audio in RAM", P::SampleStorageBytes, Basis::Excluded, Perm, Owner::Samples, 0});
     // ---- Loading ----
-    r.add({"pattern_io::LoadScratch (staged bank + Pattern + RecordedTrack)",
-           sizeof(ProfilePatternBank<P>) + patternBytes<P>() + trackBytes<P>(), scaled,
-           Lifetime::WhileLoading, Owner::LoadScratch, 0});
+    r.add({"pattern_io::LoadScratch (staged bank + Pattern + RecordedTrack)", sizeof(ProfileLoadScratch<P>),
+           M, Lifetime::WhileLoading, Owner::LoadScratch, 0});
     return r;
 }
 
-// The FM-1 voice configuration built TODAY: real types, with the classes
-// that no profile controls yet (Sequencer, Reverb, TapeEffect) at their host
-// sizes and the tape heap at the core's fixed rate. The distance from this to
-// the budget is the remaining RAM gap.
+// What constructing ProfilePipeline<P> allocates in total: the object plus
+// the tape heap (if the profile has tape). Since Engine 032 this is the same
+// as resourceReport<P>().permanentBytes().
 template <typename P>
 constexpr std::size_t buildableTodayBytes() {
-    return sizeof(ProfilePipeline<P>) + TapeEffect::machineBufferBytes();
+    return sizeof(ProfilePipeline<P>) + (P::TapeIncluded ? TapeEffect::machineBufferBytes() : 0);
 }
 
 // ---- Compile-time proofs ------------------------------------------------------
 
-// (1) HostProfile is the engine, value for value.
+// (1) HostProfile is the engine, value for value (and the defaults are host).
 static_assert(HostProfile::SampleRate == SAMPLE_RATE, "HostProfile: sample rate");
 static_assert(std::is_same<ProfilePipeline<HostProfile>, AudioPipeline<>>::value &&
                   std::is_same<AudioPipeline<>, AudioPipeline<16>>::value,
               "HostProfile: AudioPipeline voice/event counts");
 static_assert(std::is_same<ProfilePatternBank<HostProfile>, DefaultPatternBank>::value,
               "HostProfile: DefaultPatternBank");
+static_assert(std::is_same<BasicSequencer<HostProfile>, Sequencer>::value &&
+                  std::is_same<AudioPipeline<16>::Sequencer, Sequencer>::value &&
+                  std::is_same<Sequencer::Bank, DefaultPatternBank>::value,
+              "HostProfile: the host pipeline owns the host Sequencer and bank");
 static_assert(HostProfile::MonoVoices == 1, "HostProfile: MonoSynthEngine is one voice");
-static_assert(HostProfile::PatternMaxSteps == Pattern::MaxSteps &&
-                  HostProfile::PatternMaxNotes == Pattern::MaxNotes,
-              "HostProfile: Pattern capacities");
-static_assert(HostProfile::RecordedEvents == RecordedTrack::MaxEvents &&
-                  HostProfile::RecordedPasses == RecordedTrack::MaxPasses,
-              "HostProfile: RecordedTrack capacities");
-static_assert(HostProfile::MaxEventsPerBlock == Sequencer::MaxEventsPerBlock &&
-                  HostProfile::MaxActiveNotes == Sequencer::MaxActiveNotes &&
-                  HostProfile::MaxPendingLive == Recorder::MaxPendingLive,
-              "HostProfile: Sequencer limits");
-static_assert(resource_detail::eventBufferEntries(HostProfile::MaxEventsPerBlock, HostProfile::MaxActiveNotes,
-                                                  HostProfile::MaxPendingLive) ==
-                  Sequencer::eventBufferCapacity(),
-              "event-buffer formula matches the Sequencer");
-static_assert(HostProfile::ArrangementEntries == Arrangement::MaxEntries, "HostProfile: Arrangement");
+static_assert(Pattern::MaxSteps == 256 && Pattern::MaxNotes == 512 && RecordedTrack::MaxEvents == 2048 &&
+                  RecordedTrack::MaxEventsPerPass == 512 && RecordedTrack::MaxPasses == 16 &&
+                  Recorder::MaxPendingLive == 512 && Sequencer::MaxEventsPerBlock == 1024 &&
+                  Sequencer::MaxActiveNotes == 256 && Sequencer::eventBufferCapacity() == 2816 &&
+                  Arrangement::MaxEntries == HostProfile::ArrangementEntries,
+              "HostProfile: host capacities unchanged since Engine 031");
+static_assert(AudioPipeline<16>::HasReverb && AudioPipeline<16>::HasTape &&
+                  std::is_same<AudioPipeline<16>::ReverbSlot, Reverb>::value &&
+                  std::is_same<AudioPipeline<16>::TapeSlot, TapeEffect>::value,
+              "HostProfile: reverb and tape present");
 static_assert(resource_detail::tapeHeap(HostProfile::TapeDelayFrames, HostProfile::TapePrintFrames) ==
                   TapeEffect::machineBufferBytes(),
               "tape heap formula matches TapeEffect");
 
-// (2) The host decomposition adds up to the real objects, byte for byte.
-static_assert(resourceReport<HostProfile>().sequencerBytes() == sizeof(Sequencer),
-              "host Sequencer decomposition is exact");
-static_assert(resourceReport<HostProfile>().pipelineBytes() == sizeof(AudioPipeline<>),
-              "host AudioPipeline decomposition is exact");
-static_assert(resourceReport<HostProfile>().loadScratchBytes() ==
-                  sizeof(pattern_io::LoadScratch<DefaultPatternBank>),
-              "host LoadScratch decomposition is exact");
+// (2) The FM-1 instantiation uses the FM-1 profile's capacities.
+namespace fm1_check {
+using Pipe = ProfilePipeline<Fm1Profile>;
+using Seq = BasicSequencer<Fm1Profile>;
+static_assert(std::is_same<Pipe::Sequencer, Seq>::value && std::is_same<Seq::Bank, ProfilePatternBank<Fm1Profile>>::value,
+              "FM1: the pipeline owns the FM-1 sequencer and bank");
+static_assert(Seq::Pattern::MaxSteps == 64 && Seq::Pattern::MaxNotes == 128, "FM1: working pattern 64 steps, 128 notes");
+static_assert(Seq::RecordedTrack::MaxEvents == 512 && Seq::RecordedTrack::MaxPasses == 16 &&
+                  std::is_same<Seq::Recorder::Track, Seq::RecordedTrack>::value,
+              "FM1: 512 recorded events, 16 undo passes");
+static_assert(Seq::Bank::StepPool == 2048 && Seq::Bank::NotePool == 256 && Seq::Bank::EventPool == 512 &&
+                  Seq::Bank::Capacity == 16 && std::is_same<Seq::Bank::PatternType, Seq::Pattern>::value,
+              "FM1: bank pools 2048/256/512, 16 slots");
+static_assert(Seq::MaxEventsPerBlock == 256 && Seq::MaxActiveNotes == 64 &&
+                  Seq::eventBufferCapacity() == 2 * 256 + 64 + 512,
+              "FM1: 256 events per block");
+static_assert(std::is_same<Pipe::Drums, DrumEngine<8, 256>>::value, "FM1: 8 drum voices");
+static_assert(Pipe::Mono::voiceCapacity() + Pipe::Fm::voiceCapacity() + Pipe::Poly::voiceCapacity() == 7 &&
+                  Pipe::Fm::voiceCapacity() == 2 && Pipe::Poly::voiceCapacity() == 4,
+              "FM1: 7 synth voices (mono 1, FM 2, poly 4)");
+static_assert(!Pipe::HasReverb && !Pipe::HasTape && std::is_same<Pipe::ReverbSlot, AbsentEffect>::value &&
+                  std::is_same<Pipe::TapeSlot, AbsentEffect>::value,
+              "FM1: reverb and tape are not built");
+} // namespace fm1_check
 
-// (3) The FM-1 profile's configured model fits its budget. Raising an FM-1
-// capacity past the budget stops every build that includes this header.
+// (3) Both decompositions add up to the real objects, byte for byte.
+static_assert(resourceReport<HostProfile>().sequencerBytes() == sizeof(Sequencer) &&
+                  resourceReport<HostProfile>().pipelineBytes() == sizeof(AudioPipeline<>) &&
+                  resourceReport<HostProfile>().loadScratchBytes() ==
+                      sizeof(pattern_io::LoadScratch<DefaultPatternBank>),
+              "host decomposition is exact");
+static_assert(resourceReport<Fm1Profile>().sequencerBytes() == sizeof(BasicSequencer<Fm1Profile>) &&
+                  resourceReport<Fm1Profile>().pipelineBytes() == sizeof(ProfilePipeline<Fm1Profile>) &&
+                  resourceReport<Fm1Profile>().loadScratchBytes() == sizeof(ProfileLoadScratch<Fm1Profile>) &&
+                  resourceReport<Fm1Profile>().permanentBytes() == buildableTodayBytes<Fm1Profile>(),
+              "FM-1 decomposition is exact and equals the real FM-1 pipeline");
+static_assert(resourceReport<HostProfile>().countBasis(Basis::Modelled) == 0 &&
+                  resourceReport<HostProfile>().countBasis(Basis::HostSized) == 0 &&
+                  resourceReport<Fm1Profile>().countBasis(Basis::Modelled) == 0 &&
+                  resourceReport<Fm1Profile>().countBasis(Basis::HostSized) == 0,
+              "no modelled or host-sized rows remain");
+
+// (4) The FM-1 build fits its budget. Raising an FM-1 capacity past the
+// budget stops every build that includes this header.
 static_assert(resourceReport<Fm1Profile>().withinBudget(),
-              "Fm1Profile: the configured RAM model exceeds Fm1Profile::RamBudgetBytes");
+              "Fm1Profile: the FM-1 build's permanent RAM exceeds Fm1Profile::RamBudgetBytes");
 static_assert(Fm1Profile::RamBudgetBytes <= Fm1Profile::MappedRamBytes,
               "Fm1Profile: the budget must fit the VERIFIED mapped RAM");
 

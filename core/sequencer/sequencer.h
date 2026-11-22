@@ -102,10 +102,25 @@ struct TransportCommand {
     std::int64_t milliBpm = 120000;  // SetTempo only
 };
 
-class Sequencer {
+// Capacities (Engine 032): BasicSequencer<Profile> owns the profile's
+// working Pattern, Recorder (and RecordedTrack), pattern bank, per-block
+// event buffer, active-note table and quantize cache. `Sequencer` is the
+// host engine: BasicSequencer<HostProfile>. Behaviour is identical for every
+// profile; only the capacities (and so the limits that drop and count)
+// differ.
+template <typename Profile>
+class BasicSequencer {
 public:
-    static constexpr std::size_t MaxEventsPerBlock = 1024;
-    static constexpr std::size_t MaxActiveNotes = 256;
+    using ProfileType = Profile;
+    using Pattern = BasicPattern<Profile>;
+    using RecordedTrack = BasicRecordedTrack<Profile>;
+    using Recorder = BasicRecorder<Profile>;
+    using Bank = ProfilePatternBank<Profile>;
+    using PatternData = BasicPatternData<Profile>;
+    using SequencerCommand = BasicSequencerCommand<Profile>;
+
+    static constexpr std::size_t MaxEventsPerBlock = Profile::MaxEventsPerBlock;
+    static constexpr std::size_t MaxActiveNotes = Profile::MaxActiveNotes;
     static constexpr std::size_t TransportCapacity = 64;  // usable: 63
     static constexpr std::size_t CommandCapacity = 64;    // usable: 63
     static constexpr std::size_t LiveCapacity = 256;      // usable: 255
@@ -117,7 +132,7 @@ public:
     // read by the resource model (core/target/resource_model.h, Engine 031).
     static constexpr std::size_t eventBufferCapacity() { return EventBufferSize; }
 
-    explicit Sequencer(int sampleRate = 48000) : clock_(sampleRate) {
+    explicit BasicSequencer(int sampleRate = 48000) : clock_(sampleRate) {
         bank_.store(0, pattern_, recorder_.track_, quantize_);  // pattern 0 is active
     }
 
@@ -245,7 +260,7 @@ public:
     // IS the active bank slot; the bank's copy of that slot is refreshed
     // whenever the sequencer switches away from it (or commitActivePattern()).
 
-    const DefaultPatternBank& bank() const { return bank_; }
+    const Bank& bank() const { return bank_; }
     const Arrangement& arrangement() const { return arrangement_; }
     int activePattern() const { return activePattern_; }
     std::int64_t patternOriginTick() const { return origin_; }
@@ -264,7 +279,7 @@ public:
     // stops song mode. Returns false for an invalid id (or a rejected
     // immediate switch, see bankFullCount()).
     bool requestPatternSwitch(int id, SwitchTiming timing = SwitchTiming::NextLoop) {
-        if (!DefaultPatternBank::validId(id)) {
+        if (!Bank::validId(id)) {
             ++invalidCommands_;
             return false;
         }
@@ -294,7 +309,7 @@ public:
     // Removes steps, notes, recording and undo history; keeps the shape and
     // quantize settings. The active pattern is cleared in place.
     bool clearPattern(int id) {
-        if (!DefaultPatternBank::validId(id)) return false;
+        if (!Bank::validId(id)) return false;
         if (id == activePattern_) {
             finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
             pattern_.clear();
@@ -305,7 +320,7 @@ public:
 
     // dst := src, including recording, undo history, quantize and shape.
     bool copyPattern(int src, int dst) {
-        if (!DefaultPatternBank::validId(src) || !DefaultPatternBank::validId(dst)) return false;
+        if (!Bank::validId(src) || !Bank::validId(dst)) return false;
         if (src == dst) return true;
         if (src == activePattern_ && !commitActivePattern()) return false;
         if (!bank_.copy(src, dst)) return false;
@@ -315,14 +330,14 @@ public:
 
     // Copies src into the lowest empty slot; returns the new id or -1.
     int duplicatePattern(int src) {
-        if (!DefaultPatternBank::validId(src)) return -1;
+        if (!Bank::validId(src)) return -1;
         if (src == activePattern_ && !commitActivePattern()) return -1;
         return lastDuplicate_ = bank_.duplicate(src);
     }
     int lastDuplicateId() const { return lastDuplicate_; }
 
     bool setPatternLength(int id, TimeSignature ts, int bars, std::int64_t stepTicks) {
-        if (!DefaultPatternBank::validId(id)) return false;
+        if (!Bank::validId(id)) return false;
         if (id == activePattern_) return pattern_.configure(ts, bars, stepTicks);
         return bank_.setShape(id, ts, bars, stepTicks);
     }
@@ -332,7 +347,7 @@ public:
     // PatternData.
     bool replacePattern(int id, const Pattern& pattern, const RecordedTrack& track,
                         const QuantizeSettings& quantize) {
-        if (!DefaultPatternBank::validId(id) || !quantize.valid()) return false;
+        if (!Bank::validId(id) || !quantize.valid()) return false;
         if (id != activePattern_) return bank_.store(id, pattern, track, quantize);
         finishRecordingAt(clock_.fineAtSample(clock_.samplePosition()));
         pattern_ = pattern;
@@ -351,7 +366,7 @@ public:
         return true;
     }
     bool arrangementAppend(int id, int repeats) {
-        if (songActive_ || !DefaultPatternBank::validId(id)) return false;
+        if (songActive_ || !Bank::validId(id)) return false;
         return arrangement_.append(id, repeats);
     }
     bool arrangementSetEnd(ArrangementEnd end) {
@@ -393,9 +408,9 @@ public:
     // Replaces bank, arrangement and active pattern (e.g. after loading a
     // file). Only while stopped; false (unchanged) if playing, the active id
     // is invalid or the arrangement does not validate against the bank.
-    bool loadBankState(const DefaultPatternBank& bank, const Arrangement& arrangement,
+    bool loadBankState(const Bank& bank, const Arrangement& arrangement,
                        int active) {
-        if (clock_.playing() || !DefaultPatternBank::validId(active)) return false;
+        if (clock_.playing() || !Bank::validId(active)) return false;
         if (!arrangement.empty() &&
             !arrangement.validate([&bank](int id) { return bank.used(id); })) {
             return false;
@@ -527,7 +542,7 @@ private:
     Pattern pattern_;
     Recorder recorder_;
     // Engine 028: bank, arrangement, switching.
-    DefaultPatternBank bank_;
+    Bank bank_;
     Arrangement arrangement_;
     int activePattern_ = 0;
     std::int64_t origin_ = 0;  // absolute tick where the active pattern started
@@ -1260,5 +1275,8 @@ private:
         }
     }
 };
+
+// The host engine's sequencer.
+using Sequencer = BasicSequencer<HostProfile>;
 
 } // namespace databreaks

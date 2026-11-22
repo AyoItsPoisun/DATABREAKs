@@ -1,7 +1,7 @@
 # DATABREAKs progress report
 
-Updated 2026-11-21 for Engine 031 on branch `claude/engine-019-prep-transfer`.
-Engine 031 starts from `418bc65` (Engine 030). Engine 030 started from `78a7da7` (Engine 029). Engine 029 started from `d0790c0` (Engine 028). Engine 028 started from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
+Updated 2026-11-22 for Engine 032 on branch `claude/engine-019-prep-transfer`.
+Engine 032 starts from `1d36980` (Engine 031). Engine 031 started from `418bc65` (Engine 030). Engine 030 started from `78a7da7` (Engine 029). Engine 029 started from `d0790c0` (Engine 028). Engine 028 started from `2c6c2bd` (Engine 027). Engine 027 started from `7712644` (Engine 026). Engine 026 started from `f94fcef` (Engine 025). Engine 025 started from `3bdd248` (Engine 024). Engine 024 started from `7a1ced6` (Engine 023). Engine 023 started from `d326959` (Engine 022). Engine 022 started from `e4d796c` (the Engine 021 demo WAV, on top of `100a8e1`,
 Engine 021). Engine 021 started from `dfd3164` (Engine 020); Engine 020 started from
 `ce44e70` (Engine 019). Earlier: `e54db9b` (CTest/docs
 transfer), whose parent is `e75b325` on `recovery/codespaces-engine-018`
@@ -23,11 +23,12 @@ History of this report:
 - **`d0790c0`:** updated for Engine 028 (pattern banks, switching and arrangement foundation).
 - **`78a7da7`:** updated for Engine 029 (target portability boundary).
 - **`418bc65`:** updated for Engine 030 (FM-1 hardware and resource model; see `docs/FM1_HARDWARE_REPORT.md`).
-- **Engine 031 commit:** updated for Engine 031 (FM-1 resource profile, RAM accounting, zero-initialised pattern bank).
+- **`1d36980`:** updated for Engine 031 (FM-1 resource profile, RAM accounting, zero-initialised pattern bank).
+- **Engine 032 commit:** updated for Engine 032 (the FM-1 profile instantiated as real types).
 
 ## 1. Summary
 
-The repository contains host-side C++17 prototypes through **Engine 031**:
+The repository contains host-side C++17 prototypes through **Engine 032**:
 
 - synths (mono, FM, poly) and two mixers;
 - a tape-emulation chain (Engines 005–014);
@@ -47,7 +48,8 @@ The repository contains host-side C++17 prototypes through **Engine 031**:
 - pattern banks and an arrangement foundation (028): 16 compactly stored patterns with their own recordings, undo history and quantize settings, sample-exact switching at beat/bar/loop boundaries, a song chain with repeats and end modes, and a versioned, checksummed save format;
 - a target portability boundary (029): the core now compiles for 32-bit targets (portable exact 128-bit clock arithmetic, bit-identical); storage, audio-I/O and input interfaces (`platform/`) with host implementations; the save format streams through injected storage with no heap; build gates keep platform headers out of the core;
 - **an FM-1 hardware and resource model** (030, research only): `docs/FM1_HARDWARE_REPORT.md` separates verified FM-1 facts from inferences and unknowns, and measures the engine against them. The current engine needs about 2.2× the FM-1's mapped SRAM and is entirely `double` on a chip whose FPU appears to be single-precision only;
-- **an FM-1 resource profile and RAM accounting** (031): `HOST` and `FM1` profiles (`core/target/`) with every target capacity in one place, a compile-time RAM report that says which figures are measured and which are modelled, and a zero-initialised pattern bank (no 200 KB initialised-data image). The FM-1 profile's configured model fits a 384 KiB budget (296,040 B); what compiles today is still 792,240 B over it (§18).
+- **an FM-1 resource profile and RAM accounting** (031): `HOST` and `FM1` profiles (`core/target/`) with every target capacity in one place, a compile-time RAM report that says which figures are measured and which are modelled, and a zero-initialised pattern bank (no 200 KB initialised-data image). The FM-1 profile's configured model fits a 384 KiB budget (296,040 B); what compiles today is still 792,240 B over it (§18);
+- **the FM-1 profile as real types** (032): the sequencer, its working pattern, recording, bank, per-block event buffer, voices and effects are now built from the profile. The FM-1 build is a real 292,976-byte object (was 1,185,456 B with its heap), 100,240 B inside the budget, with reverb and tape left out; the host build and every render are unchanged (§19).
 
 With Engine 019, pad hits produce audio through managed sample voices, and
 choke groups fade the voices that are actually sounding.
@@ -60,15 +62,26 @@ Engine 020 adds:
 - a host benchmark.
 
 There is **still no FM-1 firmware**: no target toolchain, HAL, drivers, display,
-pad scanning, storage or boot code. Engines 019–031 have been run only on a
+pad scanning, storage or boot code. Engines 019–032 have been run only on a
 Linux development host. They have **not** been run or validated on an FM-1, and
 the benchmark numbers describe that host, not the FM-1.
 
 ## 2. What was verified
 
-### 2.1 Engine 031 commit
+### 2.1 Engine 032 commit
 
-Same environment as §2.12.
+Same environment as §2.13.
+
+- Default (Debug) build: 0 warnings; **46/46** CTest tests pass (the 45 existing tests plus `engine_032`, 22 checks). `engine_031` still passes its 18 checks, two of them updated (§19.6). The portability gates (`core_purity`, its control, `core_typecheck_32bit`, header self-containment) pass with the templated core.
+- Release, `-DDATABREAKS_PORTABLE_INT128=ON` and ASan+UBSan builds: 46/46 each, 0 warnings.
+- TSan: Engines 020–032, no reports.
+- All 25 reference renders are byte-identical to Engine 031's, in the Debug, Release and portable builds: 16 Engine 002–011 renders, the Engine 021–028 demos, and the committed `databreaks_engine_021_demo.wav`. `engine_032` H5/H6 add sequenced host renders, with and without effects, matching fingerprints recorded at `1d36980`.
+- Mutation checks: §19.6.
+- No FM-1 hardware was touched.
+
+### 2.2 Engine 031 commit (`1d36980`)
+
+Same environment as §2.13.
 
 - Default (Debug) build: 0 warnings; **45/45** CTest tests pass (the 44 existing tests plus `engine_031`, 18 checks). The portability gates (`core_purity`, its control, `core_typecheck_32bit`, header self-containment) cover the new `core/target/` headers.
 - Release, `-DDATABREAKS_PORTABLE_INT128=ON` and ASan+UBSan builds: 45/45 each, 0 warnings.
@@ -79,9 +92,9 @@ Same environment as §2.12.
 
 The first full run found one failure: `engine_031` A5 in the portable build. The figure tripwire had pinned only the native-`__int128` layout. A5 now pins both layouts: with the portable type, the FM-1 permanent total is 296,024 B, the FM-1 Sequencer 207,640 B and the host total 1,187,992 B. All five configurations were rerun and pass.
 
-### 2.2 Engine 030 commit (`418bc65`)
+### 2.3 Engine 030 commit (`418bc65`)
 
-Same environment as §2.12. Documentation and one new test only; no engine
+Same environment as §2.13. Documentation and one new test only; no engine
 code changed.
 
 - Default build: 0 warnings; **44/44** CTest tests pass (the 43 existing tests plus `engine_030`, 6 checks).
@@ -90,9 +103,9 @@ code changed.
 - All reference renders are byte-identical.
 - No FM-1 hardware was touched.
 
-### 2.3 Engine 029 commit (`78a7da7`)
+### 2.4 Engine 029 commit (`78a7da7`)
 
-Same environment as §2.12. See §16.6 for the full table.
+Same environment as §2.13. See §16.6 for the full table.
 
 - **Default build:** 0 warnings; **43/43** CTest tests pass (39 existing + `engine_029` + 3 portability gates).
 - **Release, portable-integer and ASan+UBSan builds:** 43/43 each.
@@ -103,9 +116,9 @@ Same environment as §2.12. See §16.6 for the full table.
 - **Mutation checks:** 15/15 caught.
 - **FM-1 hardware:** not run.
 
-### 2.4 Engine 028 commit (`d0790c0`)
+### 2.5 Engine 028 commit (`d0790c0`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -123,9 +136,9 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.5 Engine 027 commit (`2c6c2bd`)
+### 2.6 Engine 027 commit (`2c6c2bd`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -143,9 +156,9 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.6 Engine 026 commit (`7712644`)
+### 2.7 Engine 026 commit (`7712644`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -163,9 +176,9 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.7 Engine 025 commit (`f94fcef`)
+### 2.8 Engine 025 commit (`f94fcef`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -182,9 +195,9 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.8 Engine 024 commit (`3bdd248`)
+### 2.9 Engine 024 commit (`3bdd248`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -202,9 +215,9 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.9 Engine 023 commit (`7a1ced6`)
+### 2.10 Engine 023 commit (`7a1ced6`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -222,9 +235,9 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.10 Engine 022 commit (`d326959`)
+### 2.11 Engine 022 commit (`d326959`)
 
-Same environment as §2.12.
+Same environment as §2.13.
 
 | Check | Result |
 |---|---|
@@ -241,7 +254,7 @@ Same environment as §2.12.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.11 Engine 021 commit (`100a8e1`)
+### 2.12 Engine 021 commit (`100a8e1`)
 
 Same environment as below.
 
@@ -260,7 +273,7 @@ Same environment as below.
 | `git diff --check` | Clean |
 | Listening / FM-1 hardware | **Not done** / **not done, deliberately** |
 
-### 2.12 Engine 020 commit (`dfd3164`)
+### 2.13 Engine 020 commit (`dfd3164`)
 
 Environment: Linux virtual machine, 4 vCPU (Intel Xeon @ 2.10 GHz), GCC 13.3.0,
 CMake 3.28.3.
@@ -280,7 +293,7 @@ CMake 3.28.3.
 | Listening test | **Not done** |
 | FM-1 hardware | **Not done, deliberately**: nothing flashed or connected |
 
-### 2.13 Engine 019 commit (`ce44e70`, for reference)
+### 2.14 Engine 019 commit (`ce44e70`, for reference)
 
 22/22 CTest; `engine_019` 50 checks; ASan + UBSan 22/22; 0 warnings; render
 WAVs byte-identical to `e54db9b`.
@@ -3055,7 +3068,188 @@ or relaxed.
 2. Parameterise `Pattern`, `RecordedTrack`, `Recorder` and the `Sequencer` buffers by the profile, and make reverb and tape optional pipeline stages, so the FM-1 rows become measured objects and the 792,240 B build-today gap closes.
 3. Then, separately and with on-device measurement: `float`/fixed-point DSP, 44.1 kHz, and flash-resident samples.
 
-## 19. Recommended next steps (in order)
+## 19. Engine 032: the FM-1 profile as real types
+
+Starts from `1d36980`. Engine 031 defined the FM-1 capacities, but only
+`PatternBank`, the drum engine and the synth engines took them. `Pattern`,
+`RecordedTrack`, `Recorder`, the `Sequencer`'s buffers, the reverb and the
+tape effect were host-sized, and their FM-1 figures were *modelled*.
+Engine 032 makes all of them profile-driven, so the FM-1 build is a real
+C++ object and its RAM is measured.
+
+**No DSP arithmetic changed** (still `double`, 48 kHz in every profile).
+The save format, pattern ids, `LoadScratch` design and sample handling are
+also unchanged, and flash playback was not started. The host build is the
+same types, sizes and capacities, and every reference render is
+byte-identical. Nothing ran on an FM-1.
+
+### 19.1 Inspection: what had to become target-configurable
+
+| Member / allocation | Where | Before | Now |
+|---|---|---|---|
+| working `Pattern` (27 × `MaxSteps` steps, `MaxNotes` notes) | `Sequencer::pattern_` | fixed 256 / 512 | `BasicPattern<P>`: `P::PatternMaxSteps` / `PatternMaxNotes` |
+| `RecordedTrack` (`MaxEvents` events + visibility flags, `MaxPasses` passes) | `Recorder::track_` | fixed 2,048 / 16 | `BasicRecordedTrack<P>`: `P::RecordedEvents` / `RecordedPasses` |
+| `Recorder` pending live inputs | `Recorder::pending_` | fixed 512 | `BasicRecorder<P>`: `P::MaxPendingLive` |
+| pattern bank pools and slots | `Sequencer::bank_` | `DefaultPatternBank` | `ProfilePatternBank<P>` (`PatternBank<…, P>`) |
+| per-block event buffer (2 × per-block + active + pending) | `Sequencer::events_` | 2,816 | from `P::MaxEventsPerBlock`, `MaxActiveNotes`, `MaxPendingLive` |
+| active-note table | `Sequencer::active_` | 256 | `P::MaxActiveNotes` |
+| quantize cache (2 × int32 per event) | `Sequencer::quantStart_/quantLength_` | 2,048 | `P::RecordedEvents` (via the track) |
+| `PatternData` (ReplacePattern, loading) | `pattern_bank.h` | host-sized | `BasicPatternData<P>` |
+| `SequencerCommand::data` | `recorder.h` | `PatternData*` | `BasicSequencerCommand<P>` |
+| `LoadScratch` staged pattern + track | `pattern_io.h` | host types | the bank's `PatternType` / `TrackType` |
+| drum / FM / poly voices | `AudioPipeline` | already parameters (Engine 031) | from the profile via `ProfilePipeline<P>` |
+| `Reverb` (163,560 B) | `AudioPipeline::reverb_` | always present | absent unless `P::ReverbIncluded` |
+| `TapeEffect` (10,080 B) + `TapeMachine` heap (268,800 B) | `AudioPipeline::tape_` | always present | absent unless `P::TapeIncluded` |
+| sample audio | caller-owned `std::vector<StereoFrame>` | unchanged | unchanged (flash playback is a later engine) |
+
+Not configurable, by choice: the lane count (27 pads), transport, command and
+live-input ring sizes (63 / 63 / 255), held notes (64), arrangement (64
+entries) and the scheduled drum/synth lists. These are the same in both
+profiles, so the measured "other" rows hold them.
+
+### 19.2 Architecture (smallest change)
+
+The same pattern Engine 029 used for `BasicMusicalClock<ExactInt128>`:
+
+- **Class templates on the profile, with the old names as host aliases:**
+  - `BasicPattern<P>` → `Pattern`;
+  - `BasicRecordedTrack<P>` → `RecordedTrack`;
+  - `BasicRecorder<P>` → `Recorder`;
+  - `BasicSequencer<P>` → `Sequencer`;
+  - `BasicPatternData<P>` → `PatternData`;
+  - `BasicSequencerCommand<P>` → `SequencerCommand`.
+
+  Host code and every existing test compile unchanged.
+- **Inside `BasicSequencer`**, class-scope aliases (`Pattern`, `RecordedTrack`, `Recorder`, `Bank`, `PatternData`, `SequencerCommand`) name the profile's types, so the 1,200-line body is unchanged.
+- **`PatternBank`** gained a defaulted sixth parameter, `Profile = HostProfile`, which fixes its `PatternType` / `TrackType`. `DefaultPatternBank` is the same spelling and the same type. `ProfilePatternBank<P>` moved into `pattern_bank.h`.
+- **`RecordedPassState`** is a namespace-level struct shared by every profile; `BasicRecordedTrack<P>::PassState` is an alias of it.
+- **`AudioPipeline`** gained a sixth parameter, `Profile = HostProfile`:
+  - it selects `BasicSequencer<Profile>`;
+  - `ReverbSlot` / `TapeSlot` are `Reverb` / `TapeEffect`, or an empty `AbsentEffect` when the profile leaves them out;
+  - the chain is built with `if constexpr`;
+  - `reverb()` / `tape()` are constrained member templates that do not exist on a profile without them.
+
+  The host chain order is unchanged: EQ > Compressor > SoftClipper > Tape > Distortion > Reverb.
+- **Loading.** DBPB v1's per-pattern limits are the host capacities, now named `detail::FormatPattern` / `FormatTrack`. Validation against them is unchanged (`OutOfRange`). A file that is *valid* but exceeds a smaller profile's working capacities is `CapacityExceeded`:
+  - more than 64 steps of shape;
+  - step data beyond step 63;
+  - more than 128 notes;
+  - more than 512 events.
+
+  For the host the two sets of limits coincide, so every host status is reached in the same order as before. `BasicPattern::validShape()` was split out of `configure()`, with identical logic.
+- **`resource_model.h`** now decomposes the real object for every profile. FM-1 rows are MEASURED; reverb, tape and RAM samples are EXCLUDED; no row is MODELLED or HOST-SIZED.
+
+### 19.3 Compile-time proofs (`static_assert`, in `resource_model.h`)
+
+- **Host:** the default types are the host types. Capacities are unchanged: 256 / 512 / 2,048 (512 per pass) / 16, pending inputs 512, 1,024 per block, 256 active notes, a 2,816-entry buffer, and reverb and tape present.
+- **FM-1:** the pipeline owns `BasicSequencer<Fm1Profile>` and its bank, and these hold:
+  - working pattern of **64 steps and 128 notes**;
+  - **512 recorded events**, 16 undo passes;
+  - bank pools **2,048 / 256 / 512** and **16 slots**;
+  - **256 events per block** (buffer 1,088 entries);
+  - **8 drum voices** (`DrumEngine<8, 256>`);
+  - **7 synth voices** (mono 1 + FM 2 + poly 4);
+  - reverb and tape slots are `AbsentEffect`.
+- **Both decompositions are exact:** the report's sums equal `sizeof` of the real `Sequencer`, `AudioPipeline` and `LoadScratch`. For FM-1, the permanent total equals what constructing the pipeline allocates.
+- **Budget:** the FM-1 build fits `Fm1Profile::RamBudgetBytes`.
+
+`engine_032` also explicitly instantiates every FM-1 class template, so
+every member compiles for the FM-1 profile, not only the members its tests
+call.
+
+### 19.4 FM-1 RAM, before and after (LP64 host build)
+
+| | Engine 031 (what compiled with FM-1 voices) | Engine 031 model | **Engine 032 (measured)** |
+|---|---|---|---|
+| Working `Pattern` | 127,024 (host) | 31,792 | **31,792** |
+| `RecordedTrack` | 182,584 (host) | 45,880 | **45,880** |
+| Rest of `Recorder` | 18,568 | 18,568 | **18,568** |
+| Pattern bank | 199,840 (host) | 52,384 | **52,384** |
+| Arrangement | 272 | 272 | **272** |
+| Event buffer | 90,112 | 34,816 | **34,816** |
+| Quantize cache | 16,384 | 4,096 | **4,096** |
+| Sequencer other | 19,840 | 19,840 (host-sized) | **16,768** (64 active notes) |
+| **Sequencer** | 654,624 | 207,648 | **204,576** |
+| Drum engine (8 voices) | 44,072 | 44,072 | **44,072** |
+| Synth engines (7 voices) | 1,808 | 1,808 | **1,808** |
+| Reverb | 163,560 | excluded | **absent** |
+| Tape object + heap | 278,880 | excluded | **absent** (0 heap) |
+| Other pipeline state | 42,512 | 42,512 | **42,520** |
+| **Permanent total** | **1,185,456** | 296,040 | **292,976** |
+| vs. the 393,216 B budget | **792,240 over** | 97,176 under | **100,240 under** |
+| `LoadScratch` (while loading) | 509,448 | 130,056 | **130,056** |
+| **Peak while loading** | 1,694,904 | 426,096 | **423,032 (29,816 over)** |
+
+With `-DDATABREAKS_PORTABLE_INT128=ON` the FM-1 figures are 292,960 B
+(permanent), 204,568 B (Sequencer) and 130,056 B (scratch).
+
+The Engine 031 model predicted every parameterised row exactly. The
+measured build is 3,064 B smaller, because the host-sized rows were upper
+bounds: the active-note table has 64 entries instead of 256 (−3,072 B), and
+alignment adds 8 B.
+
+### 19.5 Remaining gap and what is not accounted
+
+- **Steady state:** the FM-1 build is 100,240 B inside the 384 KiB budget. The compile-time gap of 792,240 B is closed.
+- **While loading a bank:** 29,816 B over, because the 130,056 B `LoadScratch` is kept on purpose (the next storage engine).
+- **Not accounted, so nothing here proves a firmware fits:**
+  - the platform layer (130,380 B of RAM0 is left for it; its need is UNKNOWN);
+  - sample audio (0 B assumed; flash playback not implemented);
+  - code and constants (flash);
+  - the cache-way RAM;
+  - CPU (still software `double` on the FM-1's single-precision FPU, Engine 030 §5.2).
+- **Rate:** the FM-1 build still runs the DSP at 48 kHz (`SAMPLE_RATE`). The profile's 44,100 Hz is the target value, not yet used by the DSP.
+
+### 19.6 Tests
+
+- **`tests/audio/engine_032.cpp`** (new, `unit`, 22 checks):
+
+  | Group | Checks |
+  |---|---|
+  | Host unchanged | H1 default types; H2 object sizes; H3 capacities; H4 effect chain order and accessors; H5 a sequenced render (drums, mono, FM, poly) identical to Engine 031 at blocks of 128, 256 and 37; H6 the same with compressor, tape and reverb enabled |
+  | FM-1 applied | F1 capacities; F2 no reverb or tape (no storage, no accessor, 4-effect chain); F3 64-step shapes and 128 notes enforced (5 bars rejected, the host accepts them); F4 512 events, then 88 rejected and counted; F5 256 triggers per block: 1,904 of 2,160 dropped and counted (host 1,136); F6 bank pool 2,048 steps enforced, counted, nothing changed; F7 drums, mono and FM bit-identical to the default host pipeline; F8 with poly, bit-identical to a host-profile pipeline with the same 2 FM / 4 poly voices; F9 no allocation while rendering |
+  | Storage | S1 a host file within FM-1 limits loads into the FM-1 sequencer and saves back byte-identical; S2 a valid 256-step file loads on the host and is `CapacityExceeded` on FM-1; S3 a 1-bar pattern holding data on step 200 likewise, and the FM-1 bank is unchanged; S4 a malformed field is `OutOfRange` in both |
+  | RAM | R1 constructing the FM-1 pipeline allocates exactly its object (no tape heap), equal to the report; no modelled or host-sized rows; R2 the figures above; R3 within budget, the Engine 031 gap closed, the load-time gap still reported |
+
+- **Where the H5/H6 fingerprints came from:** they were recorded by compiling `tests/audio/engine_032_scene.h` against an unmodified checkout of `1d36980`.
+- **Why F7 and F8 differ:** `PolyVoice` pans each voice by `slot / (voices − 1)` (Engine 022 DSP, not changed), so a 4-voice poly layer is legitimately spread differently from an 8-voice one.
+- **`engine_031` updated:**
+  - A5 now pins the measured FM-1 figures (292,976 / 204,576) instead of the modelled ones (296,040 / 207,648);
+  - A7 previously asserted the 792,240 B build-today gap, which Engine 032 closes; it now asserts that what compiles for the FM-1 equals the report and is within budget;
+  - its bank-fingerprint helper loads a bank into that bank's own pattern and track types.
+
+  No other check changed. The Engine 030 fingerprints (Z3–Z7) still match.
+- **Mutation checks** (each applied alone, then reverted):
+
+  | Mutation | Result |
+  |---|---|
+  | FM-1 steps 64 → 128 | compile error: FM-1 working pattern assertion |
+  | FM-1 reverb included | compile error: FM-1 reverb/tape assertion |
+  | `MaxEventsPerBlock` hard-coded to 1,024 | compile error: FM-1 per-block assertion |
+  | `RecordedTrack::MaxEvents` hard-coded to 2,048 | compile error: FM-1 recorded-events assertion |
+  | shape capacity returns `OutOfRange` | S2 fails |
+  | step capacity returns `OutOfRange` | S3 fails (this mutation survived the first draft, which is why S3 was added) |
+  | tape inserted before the soft clipper | H4 fails |
+
+### 19.7 What did not change
+
+- DSP and rendered output: all reference renders are byte-identical (§2.1).
+- Host sequencer behaviour, capacities and sizes.
+- The DBPB v1 format, its bytes and every host load status.
+- Pattern ids.
+- `LoadScratch` (kept).
+- Sample handling (no flash playback).
+- The `double` audio path and its 48 kHz rate.
+
+### 19.8 Blockers and next steps for Engine 033
+
+1. **Loading still exceeds the budget** by 29,816 B. A staging-free load is needed: validate-then-apply, or load into an inactive A/B slot. This is the storage engine that was deferred, and a flash `StorageBackend` belongs with it.
+2. **Platform RAM is unknown.** The 384 KiB budget is an assumption, and the 100,240 B of headroom may be needed by USB, BLE, the display and the RTOS. Only on-device measurement can settle it.
+3. **Samples:** the FM-1 profile budgets 0 B of RAM for samples, which only holds once samples play from flash.
+4. **CPU:** the per-voice cost of software `double` on pi32v2 is unmeasured; the float path needs its own reference-render methodology.
+5. **The profile's 44.1 kHz rate** is not yet applied to the DSP (a deliberate audio change for a later engine).
+
+## 20. Recommended next steps (in order)
 
 1. Review Engines 019–030 (branch `claude/engine-019-prep-transfer`), read `docs/FM1_HARDWARE_REPORT.md`, and listen to `databreaks_engine_021_demo.wav` and the Engine 022–028 demo renders.
 2. Decide on R3 (restore the original Engine 003 or not). Deliberately deferred again in Engine 020.
@@ -3095,9 +3289,9 @@ or relaxed.
    - sample storage as non-owning views (int16 / flash);
    - heap-free `TapeMachine` and `SampleSliceMap` storage;
    - a faster portable 128-by-64 division.
-12. ~~Engine 031: an FM-1 resource profile and RAM accounting~~ (§18). Next, in order (§18.9): a storage engine (load without the full staging copy; a flash `StorageBackend`); parameterising `Pattern`, `RecordedTrack` and the `Sequencer` buffers by the profile so the MODELLED rows become real objects; then, separately and with on-device measurement, a `float`/fixed-point DSP path, a 44.1 kHz rate and flash-resident samples.
+12. ~~Engine 031: an FM-1 resource profile and RAM accounting~~ (§18). ~~Engine 032: the FM-1 profile as real types~~ (§19). Next, in order (§19.8): a storage engine (load without the full staging copy, which still puts loading 29,816 B over budget; a flash `StorageBackend`); then, separately and with on-device measurement, a `float`/fixed-point DSP path, a 44.1 kHz rate and flash-resident samples.
 
-## 20. Change log on this branch
+## 21. Change log on this branch
 
 - **`e54db9b`** (relative to `e75b325`):
   - ported `CLAUDE.md`, this report and `tests/unit/dsp_unit_tests.cpp` from `eb93203`;
@@ -3212,3 +3406,14 @@ or relaxed.
   - updated `CLAUDE.md`, `docs/FM1_HARDWARE_REPORT.md` (§3 figures, the static-placement finding marked fixed) and this report.
 
   DSP, sequencer behaviour, the DBPB format and every reference render are unchanged.
+- **Engine 032 commit:**
+  - `core/sequencer/pattern.h`, `recorded_track.h`, `recorder.h`, `sequencer.h`: `BasicPattern`, `BasicRecordedTrack` (+ namespace-level `RecordedPassState`), `BasicRecorder`, `BasicSequencerCommand`, `BasicSequencer` templated on the profile, with the old names as `HostProfile` aliases; `BasicPattern::validShape()`;
+  - `core/sequencer/pattern_bank.h`: a defaulted `Profile` parameter (`PatternType`/`TrackType`), `BasicPatternData`, `ProfilePatternBank`;
+  - `core/sequencer/pattern_io.h`: `LoadScratch` uses the bank's types; format limits named `FormatPattern`/`FormatTrack`; `CapacityExceeded` for valid files beyond a smaller profile;
+  - `core/audio/audio_pipeline.h`: a defaulted `Profile` parameter, optional reverb and tape (`AbsentEffect`), constrained `reverb()`/`tape()`;
+  - `core/target/resource_model.h`: measured decomposition for every profile and the FM-1 capacity `static_assert`s;
+  - added `tests/audio/engine_032.cpp` and `tests/audio/engine_032_scene.h`; `tests/audio/engine_031.cpp` (A5, A7) and `engine_031_bank_state.h` updated (§19.6);
+  - `CMakeLists.txt`: the `engine_032` target, warning loop and `unit` test entry;
+  - updated `CLAUDE.md`, `docs/FM1_HARDWARE_REPORT.md` and this report.
+
+  Host DSP, host sequencer behaviour, the DBPB format and every reference render are unchanged.

@@ -53,7 +53,8 @@ inline void hashEvent(Fnv& f, const RecordedEvent& e) {
     f.u(e.pending ? 1 : 0);
 }
 
-inline void hashWorking(Fnv& f, const Pattern& p, const RecordedTrack& t, const QuantizeSettings& q) {
+template <typename Pat, typename Track>
+void hashWorking(Fnv& f, const Pat& p, const Track& t, const QuantizeSettings& q) {
     f.i(p.timeSignature().numerator);
     f.i(p.timeSignature().denominator);
     f.i(p.bars());
@@ -61,7 +62,7 @@ inline void hashWorking(Fnv& f, const Pattern& p, const RecordedTrack& t, const 
     f.i(p.lengthTicks());
     f.u(p.stepCount());
     for (std::size_t pad = 0; pad < Pattern::Lanes; ++pad) {
-        for (std::size_t k = 0; k < Pattern::MaxSteps; ++k) {
+        for (std::size_t k = 0; k < Pat::MaxSteps; ++k) {
             const DrumStep& d = *p.step(pad, k);
             f.u(d.enabled ? 1 : 0);
             f.i(d.velocity);
@@ -105,7 +106,7 @@ std::uint64_t bankFingerprint(const Bank& b) {
     f.u(b.notesUsed());
     f.u(b.eventsUsed());
     f.u(b.fullCount());
-    auto d = std::make_unique<PatternData>();
+    auto d = std::make_unique<BasicPatternData<typename Bank::ProfileType>>();
     for (int id = 0; id < static_cast<int>(Bank::Capacity); ++id) {
         const auto s = b.info(id);
         f.u(b.used(id) ? 1 : 0);
@@ -120,7 +121,7 @@ std::uint64_t bankFingerprint(const Bank& b) {
         f.u(s.events);
         f.u(s.passes);
         f.u(b.nextPassId(id));
-        for (std::size_t i = 0; i < RecordedTrack::MaxPasses; ++i) {  // includes unused entries
+        for (std::size_t i = 0; i < Bank::TrackType::MaxPasses; ++i) {  // includes unused entries
             const auto p = b.passState(id, i);
             f.u(p.id);
             f.u(p.active ? 1 : 0);

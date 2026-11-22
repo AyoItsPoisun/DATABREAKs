@@ -23,9 +23,14 @@
 //
 // Threading: edit on the audio thread, or while the sequencer is stopped
 // (other threads use Sequencer::postCommand, Engine 026).
+//
+// Capacities (Engine 032): BasicPattern<Profile> takes MaxSteps and MaxNotes
+// from a target profile (core/target/target_profile.h). `Pattern` is the
+// host engine: BasicPattern<HostProfile> (256 steps per lane, 512 notes).
 
 #include "musical_time.h"
 #include "../audio/synth_event.h"
+#include "../target/target_profile.h"
 
 #include <array>
 #include <cstddef>
@@ -50,17 +55,36 @@ struct NoteEvent {
     std::int64_t lengthTicks = 240;  // 1 .. MaxNoteLengthTicks
 };
 
-class Pattern {
+// Drum lanes: one per FM-1 pad, for every profile.
+constexpr std::size_t PatternLanes = 27;
+
+template <typename Profile>
+class BasicPattern {
 public:
-    static constexpr std::size_t Lanes = 27;
-    static constexpr std::size_t MaxSteps = 256;
+    static constexpr std::size_t Lanes = PatternLanes;
+    static constexpr std::size_t MaxSteps = Profile::PatternMaxSteps;
     static constexpr int MaxBars = 16;
-    static constexpr std::size_t MaxNotes = 512;
+    static constexpr std::size_t MaxNotes = Profile::PatternMaxNotes;
+    // Step indices are stored in 8 bits by PatternBank and the DBPB format.
+    static_assert(MaxSteps >= 1 && MaxSteps <= 256, "pattern steps per lane: 1..256");
+    static_assert(MaxNotes >= 1, "need room for at least one note");
     static constexpr std::int64_t MinStepTicks = TicksPerQuarter / 16;  // 60
     static constexpr std::int64_t MaxStepTicks = TicksPerQuarter * 4;   // 3840
     static constexpr std::int64_t MaxNoteLengthTicks = TicksPerQuarter * 4 * 16;
 
-    Pattern() { configure(TimeSignature{}, 1, TicksPerQuarter / 4); }
+    BasicPattern() { configure(TimeSignature{}, 1, TicksPerQuarter / 4); }
+
+    // True when configure() would accept this shape (Engine 032: also used
+    // by pattern_io to tell a shape the file format allows from one that
+    // only exceeds a smaller profile's MaxSteps).
+    static bool validShape(TimeSignature ts, int bars, std::int64_t stepTicks) {
+        if (!ts.valid() || bars < 1 || bars > MaxBars ||
+            stepTicks < MinStepTicks || stepTicks > MaxStepTicks) {
+            return false;
+        }
+        const std::int64_t length = ts.ticksPerBar() * bars;
+        return length % stepTicks == 0 && length / stepTicks <= static_cast<std::int64_t>(MaxSteps);
+    }
 
     // ---- Shape ---------------------------------------------------------------
 
@@ -68,15 +92,8 @@ public:
     // and note data are kept; steps beyond the new step count and notes
     // starting beyond the new length are simply not played.
     bool configure(TimeSignature ts, int bars, std::int64_t stepTicks) {
-        if (!ts.valid() || bars < 1 || bars > MaxBars ||
-            stepTicks < MinStepTicks || stepTicks > MaxStepTicks) {
-            return false;
-        }
+        if (!validShape(ts, bars, stepTicks)) return false;
         const std::int64_t length = ts.ticksPerBar() * bars;
-        if (length % stepTicks != 0 ||
-            length / stepTicks > static_cast<std::int64_t>(MaxSteps)) {
-            return false;
-        }
         timeSignature_ = ts;
         bars_ = bars;
         stepTicks_ = stepTicks;
@@ -234,5 +251,8 @@ private:
     std::array<NoteEvent, MaxNotes> notes_{};
     std::size_t noteCount_ = 0;
 };
+
+// The host engine's pattern (256 steps per lane, 512 notes).
+using Pattern = BasicPattern<HostProfile>;
 
 } // namespace databreaks

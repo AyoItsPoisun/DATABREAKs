@@ -61,7 +61,10 @@ struct LiveEvent {
     std::int64_t sampleTime = 0;             // absolute clock sample
 };
 
-struct PatternData;  // pattern_bank.h (Engine 028)
+template <typename Profile>
+struct BasicPatternData;  // pattern_bank.h (Engine 028; per profile since Engine 032)
+template <typename Profile>
+class BasicSequencer;     // sequencer.h
 
 enum class RecordMode : std::uint8_t { Free, Loop };
 enum class WriteMode : std::uint8_t { Overdub, Replace };
@@ -87,7 +90,10 @@ enum class SequencerCommandType : std::uint8_t {
     StopArrangement
 };
 
-struct SequencerCommand {
+// Per profile since Engine 032 (ReplacePattern carries that profile's
+// pattern data); `SequencerCommand` is the host engine's.
+template <typename Profile>
+struct BasicSequencerCommand {
     SequencerCommandType type = SequencerCommandType::Arm;
     RecordMode recordMode = RecordMode::Free;
     WriteMode writeMode = WriteMode::Overdub;
@@ -100,17 +106,24 @@ struct SequencerCommand {
     int bars = 1;
     std::int64_t stepTicks = 240;
     QuantizeSettings quantize{};  // SetQuantize (Engine 027)
-    PatternData* data = nullptr;  // ReplacePattern (Engine 028): owned by
-                                  // the sender until data->status != 0
+    BasicPatternData<Profile>* data = nullptr;  // ReplacePattern (Engine 028): owned by
+                                                // the sender until data->status != 0
 };
 
-class Recorder {
-public:
-    static constexpr std::size_t MaxHeldNotes = 64;
-    static constexpr std::size_t MaxPendingLive = 512;
+using SequencerCommand = BasicSequencerCommand<HostProfile>;
 
-    RecordedTrack& track() { return track_; }
-    const RecordedTrack& track() const { return track_; }
+// Capacities (Engine 032): BasicRecorder<Profile> owns a
+// BasicRecordedTrack<Profile> and takes MaxPendingLive from the profile.
+// `Recorder` is the host engine's.
+template <typename Profile>
+class BasicRecorder {
+public:
+    using Track = BasicRecordedTrack<Profile>;
+    static constexpr std::size_t MaxHeldNotes = 64;
+    static constexpr std::size_t MaxPendingLive = Profile::MaxPendingLive;
+
+    Track& track() { return track_; }
+    const Track& track() const { return track_; }
 
     // ---- Settings (audio thread; or via Sequencer::postCommand) -------------
 
@@ -150,7 +163,8 @@ public:
     std::uint64_t invalidLiveCount() const { return invalid_; }
 
 private:
-    friend class Sequencer;
+    template <typename>
+    friend class BasicSequencer;
 
     struct Held {
         std::uint64_t sequence = 0;
@@ -165,7 +179,7 @@ private:
         std::uint64_t arrival = 0;
     };
 
-    RecordedTrack track_;
+    Track track_;
     RecordMode mode_ = RecordMode::Free;
     WriteMode writeMode_ = WriteMode::Overdub;
     unsigned targets_ = RecordAll;
@@ -196,7 +210,7 @@ private:
         if (e.sampleTime < 0) return false;
         switch (e.type) {
         case LiveEventType::DrumHit:
-            return e.value >= 0 && e.value < static_cast<int>(Pattern::Lanes) &&
+            return e.value >= 0 && e.value < static_cast<int>(PatternLanes) &&
                    e.velocity >= 1 && e.velocity <= 127;
         case LiveEventType::NoteOn:
             return e.value >= 0 && e.value <= 127 && e.velocity >= 1 &&
@@ -231,5 +245,7 @@ private:
         return true;
     }
 };
+
+using Recorder = BasicRecorder<HostProfile>;
 
 } // namespace databreaks

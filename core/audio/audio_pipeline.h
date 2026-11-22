@@ -70,21 +70,35 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace databreaks {
 
 // SynthTarget, SynthEventType and SynthEvent: see synth_event.h.
 
+// Stands in for an effect a profile leaves out (Engine 032): no storage,
+// never in the chain.
+struct AbsentEffect {};
+
 // FmVoices / PolyVoices (Engine 031) let a target resource profile choose
-// the synth voice counts; the defaults are the existing host engine
-// (AudioPipeline<16> is unchanged).
+// the synth voice counts. Profile (Engine 032) selects the sequencer's
+// capacities (BasicSequencer<Profile>) and whether the reverb and the tape
+// effect exist at all (Profile::ReverbIncluded / TapeIncluded). The
+// defaults are the existing host engine: AudioPipeline<16> is unchanged.
 template <std::size_t DrumVoices = 16,
           std::size_t DrumEvents = 256,
           std::size_t SynthEvents = 256,
           std::size_t FmVoices = 4,
-          std::size_t PolyVoices = 8>
+          std::size_t PolyVoices = 8,
+          typename Profile = HostProfile>
 class AudioPipeline {
 public:
+    using ProfileType = Profile;
+    using Sequencer = BasicSequencer<Profile>;
+    static constexpr bool HasReverb = Profile::ReverbIncluded;
+    static constexpr bool HasTape = Profile::TapeIncluded;
+    using ReverbSlot = std::conditional_t<HasReverb, Reverb, AbsentEffect>;
+    using TapeSlot = std::conditional_t<HasTape, TapeEffect, AbsentEffect>;
     using Drums = DrumEngine<DrumVoices, DrumEvents>;
     using Mono = MonoSynthEngine;
     using Fm = FmSynthEngine<FmVoices>;
@@ -103,10 +117,10 @@ public:
         effects_.append(&compressor_);
         effects_.append(&softClipper_);
         effects_.append(&distortion_);
-        effects_.append(&reverb_);
+        if constexpr (HasReverb) effects_.append(&reverb_);
         // Engine 024: tape goes after the soft clipper, through the chain's
         // insertion point (the Engine 023 order of the others is unchanged).
-        effects_.insert(effects_.indexOf(&softClipper_) + 1, &tape_);
+        if constexpr (HasTape) effects_.insert(effects_.indexOf(&softClipper_) + 1, &tape_);
         for (std::size_t i = 0; i < effects_.size(); ++i) {
             effects_.slot(i)->setBypassed(true, true);
         }
@@ -118,7 +132,11 @@ public:
     Compressor& compressor() { return compressor_; }
     SoftClipper& softClipper() { return softClipper_; }
     Distortion& distortion() { return distortion_; }
+    // Only for profiles that include them (both are in the host profile):
+    // on a profile without reverb or tape, reverb() / tape() do not exist.
+    template <bool Included = HasReverb, std::enable_if_t<Included, int> = 0>
     Reverb& reverb() { return reverb_; }
+    template <bool Included = HasTape, std::enable_if_t<Included, int> = 0>
     TapeEffect& tape() { return tape_; }  // Engine 024
 
     // The ordered chain (insert() is the hook for later stages, e.g. tape).
@@ -393,8 +411,8 @@ private:
     Compressor compressor_;
     SoftClipper softClipper_;
     Distortion distortion_;
-    Reverb reverb_;
-    TapeEffect tape_;
+    ReverbSlot reverb_;
+    TapeSlot tape_;
     EffectChain<8> effects_;
     std::uint64_t clippedSamples_ = 0;
     std::uint64_t invalidSamples_ = 0;

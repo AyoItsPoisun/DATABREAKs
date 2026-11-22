@@ -247,33 +247,40 @@ int main() {
               "A4 FM1 configured model fits the budget: permanent " + std::to_string(fm1.permanentBytes()) +
                   " B <= " + std::to_string(fm1.budget) + " B (headroom " + std::to_string(fm1.headroom()) +
                   " B); also a static_assert in resource_model.h");
-        // Tripwire: these FM1 figures are quoted in docs/PROGRESS_REPORT.md (LP64
-        // host). With the portable 128-bit clock (8- instead of 16-byte
-        // aligned) the Sequencer's fixed part is 8 B smaller.
+        // Tripwire: these figures are quoted in docs/PROGRESS_REPORT.md (LP64
+        // host). Engine 031 pinned the MODELLED FM-1 figures (permanent
+        // 296,040 B, Sequencer 207,648 B); Engine 032 builds the real FM-1
+        // types, so the FM-1 figures are now MEASURED objects. With the
+        // portable 128-bit clock (8- instead of 16-byte aligned) the
+        // Sequencer's fixed part is 8 B smaller.
         if (lp64) {
             const std::size_t d = ExactInt128IsNative ? 0 : 8;
-            check(fm1.permanentBytes() == 296040 - 2 * d && fm1.sequencerBytes() == 207648 - d &&
-                      fm1.loadScratchBytes() == 130056 && host.permanentBytes() == 1188000 - d,
-                  "A5 Report figures unchanged: FM1 permanent 296,040 B, FM1 Sequencer 207,648 B, FM1 "
-                  "LoadScratch 130,056 B, host permanent 1,188,000 B (portable int128 layout: -16/-8/0/-8)");
+            check(fm1.permanentBytes() == 292976 - 2 * d &&
+                      fm1.sequencerBytes() == 204576 - d && fm1.loadScratchBytes() == 130056 &&
+                      host.permanentBytes() == 1188000 - d,
+                  "A5 Report figures: FM1 permanent 292,976 B and FM1 Sequencer 204,576 B (measured since "
+                  "Engine 032; Engine 031 modelled 296,040 / 207,648), FM1 LoadScratch 130,056 B, host "
+                  "permanent 1,188,000 B (portable int128 layout: -16/-8/0/-8)");
         } else {
             check(true, "A5 (report figures recorded on an LP64 host; skipped)");
         }
-        // Known, documented gap: the load scratch (kept as it is in Engine
-        // 031) does not fit next to the engine within the budget.
+        // Known, documented gap: the load scratch (kept as it is) does not
+        // fit next to the engine within the budget.
         check(!fm1.loadWithinBudget() && fm1.loadHeadroom() < 0,
               "A6 KNOWN GAP reported, not hidden: while loading, FM1 needs " +
                   std::to_string(fm1.loadPeakBytes()) + " B, " + std::to_string(-fm1.loadHeadroom()) +
                   " B over budget (LoadScratch is left for the storage engine)");
+        // Engine 031 asserted here that what compiled with the FM-1 voice
+        // counts was still over budget (by 792,240 B), because the
+        // sequencer, reverb and tape were host-sized. Engine 032 closed that
+        // gap: what compiles for the FM-1 profile IS the report.
         const long long gap =
             static_cast<long long>(buildableTodayBytes<Fm1Profile>()) - static_cast<long long>(Fm1Profile::RamBudgetBytes);
-        std::printf("  Buildable today with FM1 voices (Sequencer, reverb and tape still host-sized): %zu B; "
-                    "gap to budget %lld B\n",
+        std::printf("  Built today for the FM1 profile (pipeline object + heap): %zu B; distance to budget %lld B\n",
                     buildableTodayBytes<Fm1Profile>(), gap);
-        check(gap > 0 && buildableTodayBytes<Fm1Profile>() > fm1.permanentBytes(),
-              "A7 The configured model is NOT what compiles today: the FM1-voice pipeline is still " +
-                  std::to_string(gap) + " B over budget until Pattern, RecordedTrack, the Sequencer "
-                  "buffers, reverb and tape take their capacities from the profile");
+        check(gap < 0 && buildableTodayBytes<Fm1Profile>() == fm1.permanentBytes(),
+              "A7 What compiles for the FM1 profile equals the report and is within budget (Engine 031: "
+              "792,240 B over; now " + std::to_string(-gap) + " B under)");
     }
     {
         // The FM1 bank works and the format is shared: a small host bank
